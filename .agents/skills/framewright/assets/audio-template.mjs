@@ -11,7 +11,8 @@
 import fs from 'node:fs';
 
 const SR = 44100, OUT = process.argv[2] || 'track.wav';
-// the film's curves: {fps, bpm, total, start: {plate: frame}, frames: [{f, sp, pan, z}, ...]} (frames only in world films)
+// the film's curves: {fps, bpm, total, start: {plate: frame}, frames: [{f, sp, pan, z}, ...], cues: [{name, f}, ...]}
+// (frames only in world films; cues are the moments the page marks: CUES in the plate skeleton, W.cues in a world film)
 const C = fs.existsSync('curves.json') ? JSON.parse(fs.readFileSync('curves.json', 'utf8')) : null;
 if (C && fs.existsSync('index.html') && fs.statSync('curves.json').mtimeMs < fs.statSync('index.html').mtimeMs)
   console.warn('curves.json is older than index.html: run node scripts/export-curves.mjs curves.json');
@@ -19,6 +20,11 @@ const BPM = C?.bpm ?? 120, BEAT = 60 / BPM, BAR = BEAT * 4;
 // plate starts in seconds, plus end. From curves.json when it exists; otherwise mirror look.mjs info by hand.
 const T = C ? { ...Object.fromEntries(Object.entries(C.start).map(([k, f]) => [k, f / C.fps])), end: C.total / C.fps }
             : { title: 0, end: 4 };
+// a moment the picture marks, in seconds, on the frame the picture shows it. A hit that belongs to the groove
+// takes T.plate + beats * BEAT instead: on an eighth at 120 BPM (7.5 frames) the two differ by 17 ms.
+const cue = name => { const c = C?.cues?.find(c => c.name === name);
+  if (!c) throw new Error(C?.cues ? `no cue ${name} in curves.json (cues: ${C.cues.map(c => c.name).join(', ') || 'none'})` : `no cue ${name}: export the curves`);
+  return c.f / C.fps; };
 
 const N = Math.round(T.end * SR), L = new Float32Array(N), Rr = new Float32Array(N);
 let seed = 20260101; const rnd = () => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; }; const g2 = () => rnd() * 2 - 1;
@@ -100,6 +106,8 @@ riser(T.end - 1.0, 1.0, 0.10);
 if (C?.frames?.length) follow(c => ({ f: midi(69) * (1 + 0.04 * clamp(c.sp / 25)), a: 0.05 * Math.pow(clamp(c.sp / 25), 0.8), pan: c.pan * 0.8 }));
 // every touch-down of the pen after a lift (pen.lift: tallies, crosses, checks) gets a tap, exactly on its frame
 for (const f of C?.strokes ?? []) click(f / C.fps, 0.14);
+// placeholder: a bell on every cue the page marks. Once the cues have their own sounds, rim(cue('splash')), delete this loop
+for (const c of C?.cues ?? []) beep(c.f / C.fps, 1320, 0.25, 0.12);
 
 /* ---------- master: soft limiter, normalize to -1 dBFS, 16-bit stereo WAV ---------- */
 let peak = 0; for (let i = 0; i < N; i++) { L[i] = Math.tanh(L[i] * 1.3); Rr[i] = Math.tanh(Rr[i] * 1.3); peak = Math.max(peak, Math.abs(L[i]), Math.abs(Rr[i])); }

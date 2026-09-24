@@ -134,7 +134,7 @@ function vecText(g,str,o){
 /* ---- deterministic per-pixel finisher. Grain and vignette only; put your style's post-processing here
    (halftone, scanlines, barrel, misregistration...). Runs on output pixels, ~50 ms per 1080p pass. ---- */
 function post(src,dst,S,o={}){
-  const W=src.width,H=src.height, sg=src.getContext('2d'), dg=dst.getContext('2d');
+  const W=src.width,H=src.height, sg=src.getContext('2d'), dg=wipe(dst.getContext('2d'));   // the target keeps nothing of the previous frame
   const grain=(o.grain??0)*(S.grain??1), vig=o.vig??0;
   if(!grain && !vig){ dg.drawImage(src,0,0); return; }
   const id=sg.getImageData(0,0,W,H), d=id.data, cx=(W-1)/2, cy=(H-1)/2;
@@ -163,9 +163,15 @@ const PLATES=[];
 function plate(name,opts,fn){ if(PLATES.some(p=>p.name===name)) console.warn(`duplicate plate name: ${name}`); PLATES.push(Object.assign({name,fn},opts)); }
 function TOTAL(){ return PLATES.reduce((a,p)=>a+p.len,0); }
 function locate(n){ let acc=0; for(let i=0;i<PLATES.length;i++){ if(n<acc+PLATES[i].len) return {idx:i,local:n-acc}; acc+=PLATES[i].len; } const i=PLATES.length-1; return {idx:i,local:PLATES[i].len-1}; }
+/* at(name, x): the global frame of beat x of plate `name`, rounded to a whole frame (x=0: its first frame).
+   For what carries on across cuts (an island that grows through three plates): span(S.f, at('sea'), at('city',4)).
+   Call it while drawing, not at the top level: the plates below are not registered yet. */
+function at(name,x=0){ let acc=0; for(const p of PLATES){ if(p.name===name) return Math.round(acc+x*BEAT); acc+=p.len; } throw new Error(`at(): no plate named ${name}`); }
+/* cue(name): the frame of a moment in CUES, the table the picture and the sound share (RISO.curves() exports it) */
+function cue(name){ const c=CUES.find(c=>c[2]===name); if(!c) throw new Error(`cue(): no cue named ${name}`); return at(c[0],c[1]); }
 
 /* transition drawn by the engine at plate edges; replace with the cut of your style (or leave empty) */
-function cut(g,S,amt){ g.fillStyle=`rgba(0,0,0,${amt})`; g.fillRect(0,0,LW,LH); }
+function cut(g,S,amt){ g.save(); g.setTransform(1,0,0,1,0,0); g.fillStyle=`rgba(0,0,0,${amt})`; g.fillRect(0,0,g.canvas.width,g.canvas.height); g.restore(); }   // in pixels: every row, at any width
 
 function renderFrame(n,width,seed,target){
   n=((n%TOTAL())+TOTAL())%TOTAL();
@@ -175,8 +181,8 @@ function renderFrame(n,width,seed,target){
   const S={ f:n, i:local, t:local/P.len, len:P.len, g, cv, sc, seed, W:LW, H:LH, name:P.name, post:{},
             b:rng(hash(seed,'b',P.name,Math.floor(n/3))), nz:rng(hash(seed,'nz',n)) };
   const R=rng(hash(seed,'plate',P.name));
+  g.fillStyle=COL.bg; g.fillRect(0,0,W,H);                   // in pixels, before the scale: LH*sc can fall short of the even H (853.33 of 854 rows in 9:16 at 480)
   g.setTransform(sc,0,0,sc,0,0); g.imageSmoothingEnabled=true;
-  g.fillStyle=COL.bg; g.fillRect(0,0,LW,LH);
   P.fn(S,R);
   const edgeIn=local, edgeOut=P.len-1-local;
   if(P.cutIn!==false && edgeIn<3) cut(g,S,1-edgeIn/3);
@@ -207,16 +213,22 @@ function contactSheet(n,cellW,seed,target,f0=0,f1=TOTAL()-1){   // f0..f1: a she
    PLATES. Lengths are multiples of BEAT. Replace the demo plate with your scenes.
    ===================================================================== */
 
+/* moments the picture and the sound share: [plate, beat, name], beats counted from the plate's start.
+   A plate reads one with cue(name); RISO.curves() exports them and audio.mjs puts its hits on the same frames. */
+const CUES=[ ['title',4,'mark'] ];                        // demo cue: replace with the film's cues (or leave the table empty)
+
 /* demo: title card with a moving marker, proves the pipeline end to end */
 plate('title',{len:2*BAR, cutIn:false},(S,R)=>{
   const g=S.g, m=Math.round(LH*SAFE);
   const grd=g.createRadialGradient(CX,CY,LH*0.1,CX,CY,LH*0.9); grd.addColorStop(0,'rgba(255,176,32,0.18)'); grd.addColorStop(1,'rgba(0,0,0,0)');
   g.fillStyle=grd; g.fillRect(0,0,LW,LH);
-  vecText(g,'FRAMEWRIGHT',{x:CX,y:CY-LH*0.02,size:LH*0.16,align:'center',base:'middle',color:COL.ink});
-  pixText(g,`seed ${S.seed}  frame ${pad(S.f,4)}  ${LW}x${LH}`,{x:CX,y:CY+LH*0.14,px:14,cell:5,align:'center',base:'middle',color:COL.accent});
-  pixText(g,'replace this plate with your first scene',{x:m,y:LH-m,px:14,cell:4,base:'bottom',color:COL.dim});
-  const p=ease.io(S.t), x=lerp(m,LW-m,p), y=CY+LH*0.30+Math.sin(S.t*Math.PI*4)*LH*0.02;
+  vecText(g,'FRAMEWRIGHT',{x:CX,y:CY-LH*0.02,size:Math.min(LH*0.16,LW*0.11),align:'center',base:'middle',color:COL.ink});
+  pixText(g,`seed ${S.seed}  frame ${pad(S.f,4)}  ${LW}x${LH}`,{x:CX,y:CY+LH*0.14,px:14,cell:5,fit:LW-2*m,align:'center',base:'middle',color:COL.accent});
+  pixText(g,'replace this plate with your first scene',{x:CX,y:LH*TITLE_Y,px:14,cell:4,fit:LW-2*m,align:'center',base:'bottom',color:COL.dim});   // lower text on TITLE_Y: clear of the platform's buttons in 9:16
+  const p=ease.io(S.t), x=lerp(m,LW-m,p), y=CY-LH*0.22+Math.sin(S.t*Math.PI*4)*LH*0.02;
   g.fillStyle=COL.accent; g.beginPath(); g.arc(x,y,LH*0.012+S.b.r(0,2),0,Math.PI*2); g.fill();
+  const k=S.f-cue('mark');                                   // frames since the cue: the sound hits on the same frame
+  if(k>=0 && k<12){ g.strokeStyle=COL.accent; g.lineWidth=4; g.globalAlpha=1-k/12; g.beginPath(); g.arc(x,y,LH*(0.02+0.006*k),0,Math.PI*2); g.stroke(); g.globalAlpha=1; }
   S.post.grain=6; S.post.vig=0.25;
 });
 
@@ -232,8 +244,10 @@ window.RISO={
   contact(n,cellW,f0,f1){ contactSheet(n||24,cellW||480,SEED,MAIN,f0??0,f1??TOTAL()-1); return MAIN.toDataURL('image/png'); },
   // plate starts for the soundtrack (scripts/export-curves.mjs -> curves.json -> audio.mjs builds its T table from it).
   // frames stays empty here; fill it per frame when the sound should follow something on screen (references/audio.md, section 7).
+  // cues: the CUES table as {name, plate, beat, f}, f the frame the picture shows it on.
   curves(){ const start={}; let acc=0; for(const p of PLATES){ start[p.name]=acc; acc+=p.len; }
-    return {fps:FPS,bpm:BPM,total:acc,start,frames:[]}; }
+    return {fps:FPS,bpm:BPM,total:acc,start,frames:[],cues:CUES.map(([plate,beat,name])=>{ if(!PLATES.some(p=>p.name===plate)) throw new Error(`CUES row ${name}: no plate named ${plate}`);
+      return {name,plate,beat,f:at(plate,beat)}; })}; }
 };
 window.addEventListener('load',()=>{
   if(Q.has('grid')){ contactSheet(+Q.get('grid')||24,+Q.get('cw')||480,SEED,MAIN,+(Q.get('from')||0),Q.has('to')?+Q.get('to'):TOTAL()-1); window.__ready=true; }

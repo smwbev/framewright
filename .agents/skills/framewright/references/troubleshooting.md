@@ -64,6 +64,7 @@ See `photo.md`, section 3.
 | Symptom | Cause | Fix |
 |---|---|---|
 | a frame changes with render order | state that survives a frame: a pooled canvas drawn without clearing, a global a plate changes, a cache keyed without all its inputs | wipe or clear offscreen canvases before drawing, keep state in `S`, `R` or `W`, key caches by every input |
+| a frame changes with render order only in some aspects or widths (9:16, 21:9, 16:9 at 1200) | a canvas filled or cleared in logical units (`clearRect(0, 0, LW, LH)` under the scale) misses the last pixel row, where the previous frame shows through | clear pooled canvases in pixels (`wipe()`, or `clearRect(0, 0, c.width, c.height)` under an identity transform); an older project also needs the two engine lines of the current skeleton: the background fill in pixels in `renderFrame`, `wipe()` of the target in `post()` |
 | only "after a sweep" differs | one frame leaves state behind (a `save()` without `restore()`, a clip) in a page without `wipe` | wipe the context at the start of `renderFrame` (both skeletons do) |
 | only "fresh" differs | the first frame of a tab builds something lazily and draws before it is ready | build caches and worlds before drawing, not halfway through a frame |
 | a frame differs in every order | a draw function calls the builder's `R` (world films) | take random values while building, keep them in variables |

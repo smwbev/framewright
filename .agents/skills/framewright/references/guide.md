@@ -41,13 +41,14 @@ window.RISO = {
   get plates(){ return PLATES.map(p => ({name: p.name, len: p.len})) },
   frame(n, width, seed){ renderFrame(n, width, seed, MAIN); return MAIN.toDataURL('image/png') },
   contact(n, cellW, f0, f1){ contactSheet(n, cellW, SEED, MAIN, f0, f1); return MAIN.toDataURL('image/png') },
-  curves(seed){ return {fps, bpm, total, start: {plate: frame}, frames: [...]} }   // for the soundtrack
+  curves(seed){ return {fps, bpm, total, start: {plate: frame}, frames: [...], cues: [{name, f}]} }   // for the soundtrack
 }
 ```
 
-`curves()` gives plate starts; a world film adds per-frame values (head speed and position on
-screen, camera zoom). `scripts/export-curves.mjs` writes them to `curves.json` and `audio.mjs`
-builds its timeline from that file. The world skeleton also has `stats()`, the size of the
+`curves()` gives plate starts and the cues (`CUES`, or `W.cues` in a world film); a world film
+adds per-frame values (head speed and position on screen, camera zoom).
+`scripts/export-curves.mjs` writes them to `curves.json` and `audio.mjs` builds its timeline from
+that file. The world skeleton also has `stats()`, the size of the
 world, which `look.mjs info` prints.
 
 Scripts call `RISO.frame` and save the data URL. They never screenshot the page: a
@@ -59,13 +60,28 @@ screenshot depends on CSS and device scale; `toDataURL` returns exactly the draw
   `CY` are the centre. Scenes never touch output pixels; the engine scales the context.
 - Safe area: important content inside the central 92 % of each axis. On-screen labels start
   at 7–8 % of the height from the edge. Styles that distort edges (CRT barrel, vignettes)
-  need this; other styles benefit anyway.
+  need this; other styles benefit anyway. In 9:16 the platform's UI covers the top 15 % and the
+  bottom 20 %: there labels, text and faces stay between them, lower titles on `TITLE_Y` (70 %).
 - 30 fps. `BEAT` and `BAR` derive from `BPM`. At 120 BPM a beat is 15 frames and a bar 60.
-  Plate lengths are multiples of `BEAT`; eighths (7.5 frames) are not cut points.
+  Plate lengths are multiples of `BEAT`; eighths (7.5 frames) are not cut points. A hit on an
+  eighth shows on frame 7 or 8, half a frame (17 ms) from the sound, which nobody sees. A film cut
+  on eighths takes a BPM where they are whole frames: 60, 75, 90, 100, 150 or 180.
+- Stepped motion (a pose held for several frames: sprites, cutouts) holds for a divisor
+  of `BEAT`, counted from the plate's start, `Math.floor(S.i / HOLD)`, so every beat opens a new
+  pose. At 120 BPM that is 3 or 5 frames, not 2: on twos every other beat falls inside a pose.
+  At 100 BPM (beat 18) 2, 3 or 6 fit; at 90 (20) 2, 4 or 5; at 150 (12) 2, 3 or 4.
 - Inside a plate use beats and progress, never global frame numbers:
   `const beat = Math.floor(S.i / BEAT), inBeat = (S.i % BEAT) / BEAT;`
   `span(S.i, a, b)` gives 0..1 between two local frames; wrap it in `ease.out`, `ease.io`,
   `ease.back`.
+- What carries on across cuts (an island that grows through three plates) runs on the global
+  frame, measured from plates by name: `at('shore', 2)` is the frame of beat 2 of `shore`, rounded
+  to a whole frame, so `span(S.f, at('sea'), at('city', 4))` spans three plates whatever their
+  lengths. A moment the sound must hit goes into `CUES` as `[plate, beat, name]`; a plate reads
+  it with `cue('name')` (`S.f - cue('splash')` is the frames since it), `RISO.curves()` exports it.
+  Call both while drawing, never at the top level. A world film has `W.at` (not rounded: world
+  time is continuous) and `W.cues.push`; `curves()` rounds its cues up to the first frame that
+  shows them.
 
 ## 4. Generators
 
@@ -85,14 +101,21 @@ Per-pixel effects use a linear congruential generator seeded with `hash(seed, 'g
 
 `renderFrame(n, width, seed, target)`: even height, content canvas at output size, its
 context wiped (`wipe(g)`: `reset()`, so no save, clip, shadow or composite mode survives from
-the previous frame), context scaled by `width / LW`, background fill, `P.fn(S, R)`, edge
-transition (`cutIn`, `cutOut`), reset transform, `post()` into the target. It returns `S` so
-the sheet can label cells. `locate(n)` maps a global frame to a plate and a local frame.
-`TOTAL()` sums plate lengths; `look.mjs info` prints them.
+the previous frame), background fill in device pixels, context scaled by `width / LW`,
+`P.fn(S, R)`, edge transition (`cutIn`, `cutOut`), reset transform, `post()` into the target,
+which is wiped too. It returns `S` so the sheet can label cells. `locate(n)` maps a global frame
+to a plate and a local frame, `at(name, beats)` a plate's beat back to a global frame. `TOTAL()`
+sums plate lengths; `look.mjs info` prints them, and the cues.
 
 `COL` and `ease` are frozen: a plate that edits a shared value throws at once instead of
 changing every later frame of its tab. Any offscreen canvas a plate keeps (`cvs(name, w, h)`)
-is wiped or cleared before it is drawn.
+is wiped or cleared before it is drawn, in pixels: `wipe()` it, or `clearRect(0, 0, c.width,
+c.height)` under an identity transform. `clearRect(0, 0, LW, LH)` under the scale misses the last
+pixel row at widths where `LH * sc` falls short of the even height (9:16 at 480, 16:9 at 1200),
+and the previous frame shows through there: `check.mjs` fails only in some aspects. The default
+`cut()` and the world fade fill in pixels for the same reason. A plate's own full-frame fill in
+logical units leaves that row in `COL.bg`: harmless at the final sizes of 16:9, 9:16, 4:5 and 1:1,
+which are exact, a thin line at 21:9 when the plate's ground differs from `COL.bg`.
 
 `post(src, dst, S, o)` is the style's finisher. The skeleton ships grain and vignette;
 replace or extend it per `styles.md`. A per-pixel pass over 1920×1080 costs 50 ms for

@@ -296,13 +296,13 @@ function drawWorld(S){
       sg.addColorStop(1,`rgba(0,0,0,${TITLE_SCRIM*low})`); g.fillStyle=sg; g.fillRect(0,LH*0.5,LW,LH*0.5); } }
   drawTitles(S,W);
   const fade=Math.max(FADE_IN?1-span(f,0,FADE_IN):0, FADE_OUT?span(f,W.total-FADE_OUT,W.total-1):0);
-  if(fade>0){ g.fillStyle=`rgba(0,0,0,${fade})`; g.fillRect(0,0,LW,LH); }
+  if(fade>0){ g.save(); g.setTransform(1,0,0,1,0,0); g.fillStyle=`rgba(0,0,0,${fade})`; g.fillRect(0,0,g.canvas.width,g.canvas.height); g.restore(); }   // in pixels: every row
   S.post.grain=4; S.post.vig=0.35;
 }
 
 /* ---- deterministic per-pixel finisher: grain and vignette ---- */
 function post(src,dst,S,o={}){
-  const W=src.width,H=src.height, sg=src.getContext('2d'), dg=dst.getContext('2d');
+  const W=src.width,H=src.height, sg=src.getContext('2d'), dg=wipe(dst.getContext('2d'));   // the target keeps nothing of the previous frame
   const grain=o.grain??0, vig=o.vig??0;
   if(!grain && !vig){ dg.drawImage(src,0,0); return; }
   const id=sg.getImageData(0,0,W,H), d=id.data, cx=(W-1)/2, cy=(H-1)/2;
@@ -321,6 +321,7 @@ const PLATES=[];
 /* plate(name,{len,build},fn=drawWorld). len in frames, keep it a multiple of BEAT.
    build(W,{pen,b,t0,len,R}) appends this plate's part of the world. b(x) is the frame of beat x of this plate
    (b(4) = one bar in); W.at(name,x) the same for any plate; R is a generator stable per plate name.
+   W.cues.push({name, f: b(x)}) marks a moment for the sound (RISO.curves() exports it, audio.mjs cue(name) reads it).
    The pen and the camera carry over from plate to plate: there are no cuts. A plate may bring its own fn. */
 function plate(name,opts,fn=drawWorld){ if(PLATES.some(p=>p.name===name)) console.warn(`duplicate plate name: ${name}`); PLATES.push(Object.assign({name,fn},opts)); }
 function TOTAL(){ return PLATES.reduce((a,p)=>a+p.len,0); }
@@ -330,9 +331,9 @@ function locate(n){ let acc=0; for(let i=0;i<PLATES.length;i++){ if(n<acc+PLATES
 let WORLD=null, WORLD_SEED=null;
 function getWorld(seed){ if(!WORLD || WORLD_SEED!==seed){ WORLD=buildWorld(seed); WORLD_SEED=seed; } return WORLD; }
 function buildWorld(seed){
-  const W={seed,path:newPath(),more:[],cam:[],titles:[],glows:[],sets:[],covers:[],dims:[],breaks:[],start:{},total:0};
+  const W={seed,path:newPath(),more:[],cam:[],titles:[],glows:[],sets:[],covers:[],dims:[],breaks:[],cues:[],start:{},total:0};
   let acc=0; for(const p of PLATES){ W.start[p.name]=acc; acc+=p.len; } W.total=acc;
-  W.at=(name,x=0)=>W.start[name]+x*BEAT;
+  W.at=(name,x=0)=>{ if(!(name in W.start)) throw new Error(`W.at(): no plate named ${name}`); return W.start[name]+x*BEAT; };
   const pen=W.pen=makePen(W.path,PEN_START[0],PEN_START[1],PEN_START[2]).start();
   for(const p of PLATES){ if(!p.build) continue;
     const t0=W.start[p.name], b=x=>t0+x*BEAT;
@@ -353,8 +354,8 @@ function renderFrame(n,width,seed,target){
   const S={ f:n, i:local, t:local/P.len, len:P.len, g, cv, sc, seed, W:LW, H:LH, name:P.name, post:{},
             b:rng(hash(seed,'b',P.name,Math.floor(n/3))), nz:rng(hash(seed,'nz',n)) };
   const R=rng(hash(seed,'plate',P.name));
+  g.fillStyle=COL.bg; g.fillRect(0,0,W,H);                   // in pixels, before the scale: LH*sc can fall short of the even H (853.33 of 854 rows in 9:16 at 480)
   g.setTransform(sc,0,0,sc,0,0); g.imageSmoothingEnabled=true;
-  g.fillStyle=COL.bg; g.fillRect(0,0,LW,LH);
   P.fn(S,R);
   g.setTransform(1,0,0,1,0,0);
   if(target.width!==W||target.height!==H){ target.width=W; target.height=H; }
@@ -401,6 +402,7 @@ plate('spark',{len:2*BAR, build(W,{pen,b}){
   pen.along(ring,b(4),'sio',{keep:0.85});
   W.glows.push({f0:b(4)-4,f1:b(5.5),draw(lg,f,k){ const a=Math.min(span(f,b(4)-4,b(4)),1-span(f,b(4),b(5.5)));
     glowDot(lg,0,-8,(22+40*span(f,b(4),b(5.5)))/k,LINE,0.5*a); }});             // a flash where the ring closes
+  W.cues.push({name:'ring',f:b(4)});                                             // and the sound rings with it
   pen.hold(b(4.4)); pen.along(square,b(7.4),'sio',{keep:0.6});
   camKey(W,0,0,0,34); camKey(W,b(8),0,0,50);
   title(W,b(2),b(7.2),'FRAMEWRIGHT','one continuous world');
@@ -448,10 +450,12 @@ window.RISO={
       frames.push({f,sp:+sp.toFixed(2),pan:a?+clamp((a.x-cam.x)*k/(LW/2),-1,1).toFixed(3):0,z:+cam.z.toFixed(1),w:a&&a.w!=null?+a.w.toFixed(2):0}); }
     // strokes: frames where the pen touches down after a lift (pen.lift), for a tap or a tick in the sound
     const P=W.path, strokes=[]; for(let i=1;i<P.X.length;i++) if(P.Wd[i]>=0.02 && P.Wd[i-1]<0.02) strokes.push(+P.T[i-1].toFixed(2));
-    return {fps:FPS,bpm:BPM,total:W.total,start:W.start,frames,strokes}; },
+    // cues: the moments builders marked with W.cues.push({name, f}), f rounded up to the first frame that shows it
+    const cues=W.cues.map(c=>{ if(!Number.isFinite(c.f)) throw new Error(`cue ${c.name}: frame ${c.f} is not a number`); return {...c,f:Math.ceil(c.f-1e-6)}; });
+    return {fps:FPS,bpm:BPM,total:W.total,start:W.start,frames,strokes,cues}; },
   // size of the world, printed by look.mjs info
   stats(seed){ const W=getWorld(seed??SEED); return {points:W.path.X.length,chunks:W.path.chunks.length,camKeys:W.cam.length,
-    titles:W.titles.length,glows:W.glows.length,sets:W.sets.length,covers:W.covers.length,dims:W.dims.length,extraLines:W.more.length}; }
+    titles:W.titles.length,glows:W.glows.length,sets:W.sets.length,covers:W.covers.length,dims:W.dims.length,cues:W.cues.length,extraLines:W.more.length}; }
 };
 window.addEventListener('load',()=>{
   if(Q.has('grid')){ contactSheet(+Q.get('grid')||24,+Q.get('cw')||480,SEED,MAIN,+(Q.get('from')||0),Q.has('to')?+Q.get('to'):TOTAL()-1); window.__ready=true; }

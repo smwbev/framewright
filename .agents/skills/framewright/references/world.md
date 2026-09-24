@@ -45,9 +45,10 @@ frame from `W` alone, so a frame stays a pure function of (frame, seed, width).
 | values over the whole film | functions on `W`: `W.spot(f)`, `W.headGlow(f)` | where used |
 
 Time inside a builder is in beats: `b(1.5)` is one and a half beats into the plate, `b(8)` two
-bars. Another plate's time is `W.at('name', beats)`. Never write global frame numbers. Randomness
-comes from `R`, seeded by the plate name. `look.mjs info` prints the plates with their start
-frames and the size of the world.
+bars. Another plate's time is `W.at('name', beats)`. A moment the sound must hit goes into
+`W.cues.push({name, f: b(x)})`, next to the glow or stamp it sounds with. Never write global frame
+numbers. Randomness comes from `R`, seeded by the plate name. `look.mjs info` prints the plates
+with their start frames and the size of the world.
 
 `R` belongs to the builder: take every random value while building (a tilt, a jitter, a choice)
 and keep it in a variable the draw function reads. A draw function that calls `R` itself advances
@@ -209,6 +210,6 @@ The world knows where the head is and how fast it moves on screen, so the sound 
 picture instead of a hand-written cue list. `RISO.curves()` returns plate starts and per-frame
 values (`sp` head speed in px per frame, `pan` head position −1..1, `z`, `w` the width at the
 head, 0 while the pen is lifted), plus `strokes`, the frames where the pen touches down after a
-lift. `scripts/export-curves.mjs` writes them to `curves.json`; `audio.mjs` takes its timeline from
-there, drives a voice with `follow()` and puts a tap on every touch-down. Recipes:
-`references/audio.md`, section 7.
+lift, and `cues`, the moments builders marked. `scripts/export-curves.mjs` writes them to
+`curves.json`; `audio.mjs` takes its timeline from there, drives a voice with `follow()`, puts a
+tap on every touch-down and a hit on every cue. Recipes: `references/audio.md`, section 7.

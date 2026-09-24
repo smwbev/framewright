@@ -18,4 +18,5 @@ World film (one take, no cuts): one line on the world's layout from the smallest
 and the camera per plate: where it looks and how much it sees (`z`) at the plate's start and end.
 
 Checks: every plate readable as a still in 1.5 s; two neighbouring cells of one plate never look identical;
-text fits with margins; nothing important in the outer 8 % of the frame.
+text fits with margins; nothing important in the outer 8 % of the frame (9:16: the top 15 % and bottom 20 %).
+Key moments the sound must hit become the page's `CUES` (`[plate, beat, name]`), or `W.cues` in a world film.

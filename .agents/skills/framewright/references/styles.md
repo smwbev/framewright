@@ -2,7 +2,9 @@
 
 Twelve styles that render well from code and read on a contact sheet. Each entry: the look,
 a palette to start from, type, motion language, signature objects, the post-processing recipe,
-the sound palette, the trap. Palettes are starting points; the topic picks the accent.
+the sound palette, the trap. Palettes are starting points; the topic picks the accent. The list
+is a starting set, not a limit: a concept may build a system of its own, described under the same
+headings.
 
 Numbers in recipes assume a 1920×1080 output; scale with width where noted. Every per-pixel
 pass is deterministic: noise comes from a linear congruential generator seeded with
@@ -172,8 +174,9 @@ Palette: 16 colours at most; start from a known pattern: dark navy, mid blue, te
 yellow, orange, red, magenta, four greys.
 Type: a 5×7 bitmap font drawn from a table of glyph rows, or the bitmap-text helper at
 `px 8`.
-Motion: everything moves in whole pixels; 8–12 fps feel for characters (hold frames),
-30 fps for the camera; screen shake by 1–2 pixels; a flash frame on hits.
+Motion: everything moves in whole pixels; characters step at about 10 fps, each pose held for
+a divisor of the beat (3 frames at 120 BPM; guide.md, section 3), the camera at 30 fps; screen
+shake by 1–2 pixels; a flash frame on hits.
 Objects: a title screen with "PRESS START" blinking, a scrolling landscape in two layers,
 a progress bar, a boss health bar, a level-complete jingle screen.
 Post recipe: render to a small canvas, scale up with `imageSmoothingEnabled=false`; optional

@@ -5,7 +5,7 @@ license: MIT
 compatibility: Node 20+, Chrome via Puppeteer, ffmpeg with libx264. Python 3 with numpy, scipy and Pillow only for photo tracing. macOS and Linux; Windows through WSL.
 metadata:
   author: smwbev
-  version: "1.2.1"
+  version: "1.3.0"
   homepage: https://github.com/smwbev/framewright
 ---
 
@@ -132,9 +132,12 @@ Read `references/guide.md` once before the first scene. The essentials:
   1080). `R` is a generator stable for the whole plate; `S.b` re-seeds every three frames and
   gives a live line; `S.nz` changes every frame for noise. Seeds derive from the plate name.
 - All geometry in logical units, centred through `CX, CY`. Keep important content inside the
-  central 92 % of the frame.
+  central 92 % of the frame; in 9:16 also out of the top 15 % and the bottom 20 %, where the
+  platform's buttons and captions sit.
 - Time inside a plate in beats: `Math.floor(S.i/BEAT)`, `span(S.i, a, b)`, `ease.out(...)`.
-  Never hard-code global frame numbers inside a scene.
+  Never hard-code global frame numbers inside a scene. Something that carries on across cuts
+  takes another plate's time by name, `at('plate', beats)`; a moment the sound must hit goes
+  into `CUES` and is read with `cue('name')`.
 - Helpers live above the plates block, never between plates.
 - Transitions are drawn by the engine at plate edges (`cutIn`/`cutOut` flags); scenes do
   not know about them.
@@ -208,12 +211,14 @@ a placeholder.
 
 ## Step 7. Sound
 
-`scripts/export-curves.mjs` writes `curves.json` from the page: plate starts, and in a world
-film the speed and screen position of the line's head for every frame. `audio.mjs` takes its
+`scripts/export-curves.mjs` writes `curves.json` from the page: plate starts, the cues, and in a
+world film the speed and screen position of the line's head for every frame. `audio.mjs` takes its
 timeline from it, so it never drifts from the picture (a page without `RISO.curves()` needs the
 starts from `look.mjs info` copied into `T` by hand). Write one block of events per plate using
-the cue map in `references/audio.md`; in a world film give the line or the character a voice
-that follows the curves (`follow()`, `references/audio.md`, section 7). Then:
+the cue map in `references/audio.md`; hits on something the picture marks take their time from
+the page's cues, `cue('name')` (`CUES`, or `W.cues` in a world film), not from beat numbers
+copied out of a plate; in a world film give the line or the character a voice that follows the
+curves (`follow()`, `references/audio.md`, section 7). Then:
 
 ```bash
 node scripts/export-curves.mjs curves.json

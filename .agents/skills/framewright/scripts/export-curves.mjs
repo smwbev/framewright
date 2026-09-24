@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// Dump the film's curves for the soundtrack: plate starts and, in world films, per-frame values.
+// Dump the film's curves for the soundtrack: plate starts, cues and, in world films, per-frame values.
 //   node export-curves.mjs [out=curves.json] [seed=7]
-// Writes {fps, bpm, total, start: {plate: frame}, frames: [{f, sp, pan, z, ...}]} from window.RISO.curves(seed).
-// World films fill `frames` (head speed and position on screen, camera zoom); plate films give plate starts only.
+// Writes {fps, bpm, total, start: {plate: frame}, frames: [{f, sp, pan, z, ...}], cues: [{name, f, ...}]} from window.RISO.curves(seed).
+// World films fill `frames` (head speed and position on screen, camera zoom); plate films give plate starts and cues.
 // A page without RISO.curves() is skipped with a note and exit code 0, so make.sh can always call this.
 // Env: HTML=path/to/index.html (default ./index.html), AR=9:16 (aspect override)
 import puppeteer from 'puppeteer';
@@ -25,7 +25,7 @@ try {
   } else {
     const c = await p.evaluate(s => window.RISO.curves(s), +seedS);
     fs.writeFileSync(out, JSON.stringify(c));
-    console.log(`${out}: ${c.total} frames at ${c.fps} fps, ${c.frames.length ? 'per-frame curves' : 'plate starts only'}; starts ${JSON.stringify(c.start)}`);
+    console.log(`${out}: ${c.total} frames at ${c.fps} fps, ${c.frames.length ? 'per-frame curves' : 'plate starts'}${c.cues?.length ? `, ${c.cues.length} cue${c.cues.length > 1 ? 's' : ''}` : ''}; starts ${JSON.stringify(c.start)}`);
   }
 } finally {
   await b.close();

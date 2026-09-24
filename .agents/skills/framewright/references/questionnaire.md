@@ -74,7 +74,8 @@ For each concept produce:
 
 - **Name**: two words the user can say back.
 - **Logline**: one sentence, present tense, what the viewer sees from first to last frame.
-- **Visual system**: the style family from `styles.md`, a three-colour palette, the type.
+- **Visual system**: a family from `styles.md` or a system of its own (a weather map, a boarding
+  pass, a line of light, a red pencil on a light table), a three-colour palette, the type.
 - **Key scenes**: three to five, in order, each one line, each readable as a still.
 - **Ending**: the final image and the last text on screen.
 - **Sound sketch**: three cues.

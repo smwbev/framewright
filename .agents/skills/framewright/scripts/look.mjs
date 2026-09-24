@@ -55,7 +55,9 @@ try {
   } else if (mode === 'info') {
     await open(7);
     const info = await p.evaluate(() => ({ total: window.RISO.total, fps: window.RISO.fps ?? 30, plates: window.RISO.plates,
-      world: typeof window.RISO.stats === 'function' ? window.RISO.stats() : undefined }));
+      world: typeof window.RISO.stats === 'function' ? window.RISO.stats() : undefined,
+      cues: (() => { try { const c = window.RISO.curves?.()?.cues; return c?.length ? c.map(c => ({ name: c.name, f: c.f })) : undefined; }
+                     catch (e) { return `RISO.curves() throws: ${e.message}`; } })() }));
     let acc = 0; for (const pl of info.plates) { pl.start = acc; pl.sec = +(acc / info.fps).toFixed(2); acc += pl.len; }
     info.seconds = +(info.total / info.fps).toFixed(2);
     console.log(JSON.stringify(info, null, 2));

@@ -1,12 +1,13 @@
 #!/usr/bin/env node
 // Pre-render check of a framewright page: deterministic, self-contained, on the grid. make.sh runs it before a render.
 //   node check.mjs [seed=7] [width=480]
-// FAIL (exit 1): a frame throws or the page logs an error; a frame's pixels depend on what was rendered before it
+// FAIL (exit 1): a frame throws, RISO.curves() throws (a cue that names no plate) or the page logs an error; a frame's pixels depend on what was rendered before it
 //   (every probe is compared fresh in a new page, in forward, backward and shuffled order, right after the previous
 //   frame, after a render at another width, and after a sweep over the film the way a render tab walks it); the
 //   source calls Math.random, Date or performance.now; the page requests anything but itself; the HTML embeds base64 media.
 // WARN: console warnings, plate lengths off the beat, a BPM that does not divide into frames, a flat frame inside a
-//   plate, a plate whose inner frames are identical, a stale curves.json, an HTML over 200 KB.
+//   plate, a plate whose inner frames are identical, a cue outside the film or named twice, a stale curves.json,
+//   an HTML over 200 KB.
 // Probes: the first, quarter, middle, three-quarter and last frame of every plate.
 // Env: HTML=path/to/index.html (default ./index.html), AR=9:16 (aspect override)
 import puppeteer from 'puppeteer';
@@ -67,6 +68,12 @@ try {
   const film = await p0.evaluate(() => ({ total: window.RISO.total, fps: window.RISO.fps ?? 30, plates: window.RISO.plates,
     beat: typeof BEAT !== 'undefined' ? BEAT : null, bpm: typeof BPM !== 'undefined' ? BPM : null, ar: typeof AR !== 'undefined' ? AR : null }));
 
+  // the sound's timeline: curves() must run now, not after the render (a cue that names no plate throws here)
+  let cues = [];
+  try { cues = await p0.evaluate(s => window.RISO.curves?.(s)?.cues ?? [], seed); } catch (e) { fail('curves', `RISO.curves() throws: ${String(e.message).split('\n')[0]}`); }
+  for (const c of cues) if (!(c.f >= 0 && c.f < film.total)) warn('timeline', `cue ${c.name} at frame ${c.f} is outside the film (0..${film.total - 1}): the picture never shows it, the sound drops it`);
+  for (const n of new Set(cues.map(c => c.name))) if (cues.filter(c => c.name === n).length > 1) warn('timeline', `cue ${n} is named twice: cue('${n}') finds the first, the sound plays both`);
+
   /* ---- timeline ---- */
   let acc = 0; const starts = film.plates.map(pl => { const s = acc; acc += pl.len; return s; });
   info('timeline', `${film.plates.length} plates, ${film.total} frames, ${(film.total / film.fps).toFixed(1)} s`);
@@ -77,7 +84,10 @@ try {
       const fit = []; for (let t = 60; t <= 200; t++) if ((film.fps * 60) % t === 0) fit.push(t);
       warn('timeline', `${film.bpm} BPM is ${exact.toFixed(2)} frames per beat: the picture rounds the beat, the sound does not, and they drift; at ${film.fps} fps these fit: ${fit.join(', ')}`);
     }
-    info('timeline', `beat ${+exact.toFixed(2)} frames, eighth ${+eighth.toFixed(2)}${Number.isInteger(eighth) ? '' : ' (not a whole frame: keep cuts and hits on beats)'}`);
+    const whole8 = []; for (let t = 60; t <= 200; t++) if ((film.fps * 30) % t === 0) whole8.push(t);
+    info('timeline', `beat ${+exact.toFixed(2)} frames, eighth ${+eighth.toFixed(2)}` + (Number.isInteger(eighth) ? ''
+      : Number.isInteger(exact) ? `: a hit on an eighth shows half a frame (${Math.round(500 / film.fps)} ms) off the musical grid, too little to see; cut on beats. Whole eighths at ${film.fps} fps: ${whole8.join(', ')} BPM`
+      : ' (not a whole frame: keep cuts and hits on beats)'));
   }
 
   /* ---- probes ---- */

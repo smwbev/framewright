@@ -19,6 +19,15 @@ grid is the same as the video's: at 120 BPM `BEAT = 0.5`, `BAR = 2.0`. An event 
 on a frame takes its time from the film, `T.plate + beats * BEAT` or `frame / fps`, never from
 seconds retyped by hand.
 
+A moment the picture marks (a splash, a stamp, a lamp) is named once in the page, `CUES` in the
+plate skeleton or `W.cues.push({name, f})` in a world builder, and read here with `cue('splash')`:
+its time in seconds on the frame the picture shows it. Move the moment in the picture, export the
+curves, and the hit moves with it. A hit that belongs to the groove (a drum pattern, hats on the
+off-beats) keeps `T.plate + beats * BEAT`: on an eighth at 120 BPM (7.5 frames) the two differ by
+17 ms, far below the 45 ms at which sound ahead of picture begins to show, while a pattern moved
+onto frames starts to swing. (`at(t)` in `audio.mjs` is the curve sampler of section 7, not the
+page's `at()`.)
+
 ## 2. Cue map
 
 | On screen | In sound |
@@ -106,7 +115,8 @@ In a world film (`references/world.md`) the sound can read the picture instead o
 
 And `strokes`: the frames where the pen touches down after a lift (`pen.lift`). A tick or a
 pencil tap on each of them lands exactly on the picture; detecting touch-downs from per-frame
-`w` misses lifts shorter than a frame.
+`w` misses lifts shorter than a frame. And `cues`, the moments the builders marked with
+`W.cues.push`, read with `cue(name)` (section 1).
 
 Add fields the sound needs (a character on screen, a second head) in `curves()` the same way.
 In `audio.mjs`, `at(t)` interpolates the records at time `t`, and `follow(fn, opts)` runs a voice
