@@ -37,6 +37,10 @@
 | a close-up looks busy | decor as bright as the subject | spotlight: `W.spot` about 0.6 in intimate scenes |
 | bloom washes the picture out | light over a light ground, too much bloom | keep the ground dark under light, lower the bloom alpha from 0.85 |
 | decor crowds the frame after a zoom out | one grid for every scale | several grids ×4 apart, each shown while its dots are 40+ px apart on screen |
+| a coloured line vanishes on a light ground | the line is added as light | `LINE_ON = 'paper'` in `world.html` |
+| stray lines between tally marks or letters | the pen travels with ink on | `pen.lift(x, y, t1)` between marks |
+| the cover (frame 0) is black or empty | a fade-in, a title that has not faded in, strokes that start at 0 | `FADE_IN = 0`, title `f0` below zero, `PEN_START` with a negative time |
+| a title over the lightbox or paper is unreadable | cream text on a light picture | `{plate: 0.72}` on the title, `TITLE_SCRIM` for the lower half |
 
 ## Portrait
 
@@ -50,6 +54,7 @@ See `photo.md`, section 3.
 | a scene is silent | no bed | add hum, hiss or a pad at 0.02–0.06 under everything |
 | the track is one solid block | too many layers at high amplitude | drop beds to 0.03, drums to 0.5, watch the pre-normalization peak (aim 0.7) |
 | clicks at cue boundaries | zero attack or release | `att` 4 ms, `rel` 20 ms minimum |
+| a tap lags or misses a quick stroke | touch-downs guessed from per-frame curves | use `C.strokes`, the exact touch-down frames |
 | sound follows an old version of the picture | stale `curves.json` | `node scripts/export-curves.mjs curves.json` before `audio.mjs` (`make.sh` and `npm run audio` do; the template warns) |
 | a voice that follows the picture zippers | controls jump every frame | smooth amplitude and pan over 20–30 ms (`follow` does) |
 | the follow voice drones at one level | `sMax` too low, the curve saturates | raise `sMax` to the speed of a brisk stroke; read `sp` in `curves.json` |
@@ -61,6 +66,7 @@ See `photo.md`, section 3.
 | a frame changes with render order | state that survives a frame: a pooled canvas drawn without clearing, a global a plate changes, a cache keyed without all its inputs | wipe or clear offscreen canvases before drawing, keep state in `S`, `R` or `W`, key caches by every input |
 | only "after a sweep" differs | one frame leaves state behind (a `save()` without `restore()`, a clip) in a page without `wipe` | wipe the context at the start of `renderFrame` (both skeletons do) |
 | only "fresh" differs | the first frame of a tab builds something lazily and draws before it is ready | build caches and worlds before drawing, not halfway through a frame |
+| a frame differs in every order | a draw function calls the builder's `R` (world films) | take random values while building, keep them in variables |
 | "the page requests …" | an image, font, stylesheet or script from outside | draw it in code; a photo becomes polygons |
 | "calls Date" or "calls Math.random" | a clock or randomness outside the seed | use the frame number and the plate's generators |
 | "the page stops on an error while it loads" | a plate throws on the first frame, or a frozen value was edited | read the error, fix the plate |

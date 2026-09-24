@@ -102,6 +102,11 @@ In a world film (`references/world.md`) the sound can read the picture instead o
 | `sp` | speed of the line's head on screen, logical px per frame; 0 while it rests |
 | `pan` | the head's position on screen, −1 left edge … 1 right edge |
 | `z` | the camera: world units across the short side |
+| `w` | line width at the head, 0 while the pen is lifted |
+
+And `strokes`: the frames where the pen touches down after a lift (`pen.lift`). A tick or a
+pencil tap on each of them lands exactly on the picture; detecting touch-downs from per-frame
+`w` misses lifts shorter than a frame.
 
 Add fields the sound needs (a character on screen, a second head) in `curves()` the same way.
 In `audio.mjs`, `at(t)` interpolates the records at time `t`, and `follow(fn, opts)` runs a voice
@@ -118,6 +123,8 @@ sample by sample: `fn(c, t)` returns `{f, a, pan}`. Mapping that worked in a fin
 - a creature in flight: `buzz`, two saws a hair apart (1 : 2.003) through two one-pole low-passes
   near 1.1 kHz, at 200–250 Hz, louder and slightly higher in fast flight, a tremolo of 15–20 Hz
   when it wiggles;
-- when the line stops for good, let the voice die with it; silence after a long drone is an event.
+- when the line stops for good, let the voice die with it; silence after a long drone is an event;
+- a pencil or a marker on paper: band-passed noise (1.3–5 kHz) whose loudness follows `sp` only
+  while `w` shows ink, roughened by a slow random grain, plus a tap on every entry of `strokes`.
 
 The curves come from the main aspect; one track serves the vertical cut too.

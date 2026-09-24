@@ -98,6 +98,8 @@ for (let t = 0; t < T.end - 0.5; t += BEAT) beep(t, 1760, 0.03, 0.08);
 riser(T.end - 1.0, 1.0, 0.10);
 // world films: the line has a voice. It swells with the head's speed on screen, rises a little in pitch and follows the head left and right.
 if (C?.frames?.length) follow(c => ({ f: midi(69) * (1 + 0.04 * clamp(c.sp / 25)), a: 0.05 * Math.pow(clamp(c.sp / 25), 0.8), pan: c.pan * 0.8 }));
+// every touch-down of the pen after a lift (pen.lift: tallies, crosses, checks) gets a tap, exactly on its frame
+for (const f of C?.strokes ?? []) click(f / C.fps, 0.14);
 
 /* ---------- master: soft limiter, normalize to -1 dBFS, 16-bit stereo WAV ---------- */
 let peak = 0; for (let i = 0; i < N; i++) { L[i] = Math.tanh(L[i] * 1.3); Rr[i] = Math.tanh(Rr[i] * 1.3); peak = Math.max(peak, Math.abs(L[i]), Math.abs(Rr[i])); }

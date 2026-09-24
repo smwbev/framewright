@@ -5,7 +5,7 @@ license: MIT
 compatibility: Node 20+, Chrome via Puppeteer, ffmpeg with libx264. Python 3 with numpy, scipy and Pillow only for photo tracing. macOS and Linux; Windows through WSL.
 metadata:
   author: smwbev
-  version: "1.2.0"
+  version: "1.2.1"
   homepage: https://github.com/smwbev/framewright
 ---
 
@@ -87,7 +87,7 @@ accept terse answers like `1b 2a 3c`. Always ask, in this order:
    pasted into chat cannot be saved by you. Ask about rights for real people.
 7. Sound: synthesized, none, or room for the user's track (then ask its BPM).
 8. Deliverables and quality: draft or final, extra cuts (vertical, GIF, poster frame,
-   seed variations).
+   seed variations), a cover as the first frame of the MP4 (feeds show it as the preview).
 
 If the user says "you decide", take the defaults, say which ones you took, and move on.
 
@@ -182,7 +182,7 @@ the scene on the synthetic placeholder that ships in the skeleton and say so.
 ```bash
 node scripts/look.mjs sheet 24 480 7 shots/sheet.png      # look at it, fix, repeat
 node scripts/check.mjs                                    # determinism and self-containment, must say OK
-node scripts/render.mjs frames 7 1920 5                   # dir, seed, width, tabs
+node scripts/render.mjs frames 7 1920 5                   # dir, seed, width (left out: 1920 landscape, 1080 portrait), tabs
 bash scripts/build.sh out.mp4                             # frames (+ track.wav) -> mp4
 ```
 
@@ -233,7 +233,9 @@ another seed (a different impression of the same plates), a vertical cut
 (`AR=9:16 node scripts/render.mjs frames-v 7 1080 5`, then check a sheet with `AR=9:16`; lower
 titles sit at 70 % of the height there, `TITLE_Y`, clear of the platform's buttons),
 a GIF for chats, a poster frame (`look.mjs shot <frame> 1920`), the HTML itself as a live
-preview. Remove intermediate MP4s so one result remains.
+preview. When the brief asks for the cover as the first frame, frame 0 must be a finished picture:
+no fade-in, the title already up, marks already drawn (`references/world.md`, section 7); shoot it
+at full size as the poster too. Remove intermediate MP4s so one result remains.
 
 ## Changing things later
 

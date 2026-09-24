@@ -49,6 +49,12 @@ bars. Another plate's time is `W.at('name', beats)`. Never write global frame nu
 comes from `R`, seeded by the plate name. `look.mjs info` prints the plates with their start
 frames and the size of the world.
 
+`R` belongs to the builder: take every random value while building (a tilt, a jitter, a choice)
+and keep it in a variable the draw function reads. A draw function that calls `R` itself advances
+the generator on every render, so the same frame comes out different each time; `check.mjs`
+reports such a frame as changing in every render order. This bit a real film through the tilt of a
+few sticky notes.
+
 ## 3. The line
 
 The line is five arrays: `X, Y` in world units, `T` the frame at which the head passes the point,
@@ -61,6 +67,7 @@ multiplier. The pen writes them:
 | `pen.to(x, y, t1, ease, o)` | a straight stroke |
 | `pen.bez(c1, c2, p, t1, ease, o)` | a cubic Bézier from the current point |
 | `pen.hold(t1)` | stay still until `t1` |
+| `pen.lift(x, y, t1)` | move to `(x, y)` by `t1` without drawing: tally marks, crosses, checks, letters |
 
 Options: `keep` (the memory floor, a number or a function of the stroke fraction `u`), `width`
 (the same), `step` (resampling step in world units: 0.5, or 1–2 for long flights seen from far),
@@ -71,7 +78,9 @@ Points are resampled at a constant step and each point's time comes from the inv
 so the head moves along the whole polyline with one ease however its vertices are spaced. `hold`
 writes a point, so the head does not creep into the next stroke. A stroke that arrives before the
 pen's current time means the previous stroke overran; the pen warns in the console and draws it
-at once. `buildWorld` also warns when a plate's strokes run past the plate's end.
+at once. `buildWorld` also warns when a plate's strokes run past the plate's end. A lifted pen
+writes points of width 0; the line is cut so that no drawing chunk mixes ink and lifted pen, and
+lifted chunks are never stroked.
 
 Drawing: the head at frame `f` is found by binary search in `T` and interpolated between two
 points. The finished part is cached as `Path2D` chunks of 20 points; only the chunk that holds the
@@ -105,12 +114,19 @@ same subject in 16:9 and 9:16.
 Before the first key and after the last the camera stands still; with no keys it frames `z = SHORT`
 around the origin.
 
-## 5. Light
+## 5. Light, or ink on paper
 
 The line, the head and every glow are drawn in world coordinates on an offscreen canvas of the
 frame's size, then added onto the picture twice with `lighter`: through `filter = blur(W/170 px)`
 at alpha 0.85 (bloom), then sharp. Light adds to a dark picture and never muddies it; keep the
 ground dark wherever light must read.
+
+On a light ground (paper, a lightbox, a whiteboard) added light disappears: a red line added to
+white stays white. Set `LINE_ON = 'paper'`: the line is stroked onto the picture itself with normal
+compositing, after the decor, and the wide faint pass becomes a soft bleed of the ink. Covers work
+only on the light layer. Give the tool a body with `W.drawHead = (g, x, y, S, f) => ...`, called at
+the head in screen coordinates after everything but the titles: a grease pencil tilted like a hand
+holds it, a marker, a needle. It works in both modes.
 
 - The head: a soft dot of 20 px with a 5 px core, scaled by `W.headGlow(f)` (a breath before the
   first stroke, dimmer while a character sits on the head).
@@ -148,6 +164,16 @@ of the frame (a counter). A title fades in over 14 frames, out over 16, rises 12
 to fit 84 % of the width. Two titles in the same place at the same time read as one smudge: end
 one before the next begins. `buildWorld` warns about overlaps, and `look.mjs` prints the warning.
 
+Over a light or busy picture give the title a plate: `{plate: 0.72}` draws a dark rounded plate
+behind the block. `TITLE_SCRIM` (0..1) darkens the lower half of the frame while a lower title is
+up, so the next scene waiting below does not crowd the text.
+
+A cover on frame 0, for feeds that show the first frame as the preview: `FADE_IN = 0`, a title with
+`f0` below zero (fully visible on the first frame), and strokes that already exist when the film
+starts. Put `PEN_START` at the first stroke with a negative time (`[x, y, -60]`) and draw that stroke
+to a time below zero: a circled photo is on the cover, and the line leaves it once the film runs.
+Then shoot frame 0 at full size: it is also the poster.
+
 ## 8. Review
 
 - Sheets per section, not only for the whole film:
@@ -181,6 +207,8 @@ one before the next begins. `buildWorld` warns about overlaps, and `look.mjs` pr
 
 The world knows where the head is and how fast it moves on screen, so the sound can follow the
 picture instead of a hand-written cue list. `RISO.curves()` returns plate starts and per-frame
-values (`sp` head speed in px per frame, `pan` head position −1..1, `z`);
-`scripts/export-curves.mjs` writes them to `curves.json`; `audio.mjs` takes its timeline from
-there and drives a voice with `follow()`. Recipes: `references/audio.md`, section 7.
+values (`sp` head speed in px per frame, `pan` head position −1..1, `z`, `w` the width at the
+head, 0 while the pen is lifted), plus `strokes`, the frames where the pen touches down after a
+lift. `scripts/export-curves.mjs` writes them to `curves.json`; `audio.mjs` takes its timeline from
+there, drives a voice with `follow()` and puts a tap on every touch-down. Recipes:
+`references/audio.md`, section 7.

@@ -40,6 +40,9 @@ const WIDTH = +(Q.get('w') || 1920);
 const SAFE  = 0.08;                                        // keep important content this far from edges (fraction of LH)
 const TITLE_Y = AR < 1 ? 0.70 : 0.80;                      // baseline of lower titles; in 9:16 the bottom 20 % belongs to platform UI
 const FADE_IN = 0, FADE_OUT = BEAT;                        // frames from and to black; 12-24 in for a film that opens from black
+const LINE_ON = 'light';                                   // 'light': the line glows, added to a dark picture; 'paper': ink or pencil on a light ground
+const PEN_START = [0,0,0];                                 // where and when the pen starts; a negative time pre-draws strokes (a cover on frame 0)
+const TITLE_SCRIM = 0;                                     // 0..1: darken the lower half of the frame while a lower title is up
 const TAU = Math.PI*2;
 
 /* ---------- generators ---------- */
@@ -134,6 +137,7 @@ function makePen(P,x,y,t){
     bez(c1,c2,p,t1,e,o){ const x0=this.x, y0=this.y, pts=[];   // cubic Bezier from the current point
       for(let i=1;i<=48;i++){ const s=i/48, m=1-s; pts.push([m*m*m*x0+3*m*m*s*c1[0]+3*m*s*s*c2[0]+s*s*s*p[0], m*m*m*y0+3*m*m*s*c1[1]+3*m*s*s*c2[1]+s*s*s*p[1]]); }
       return this.along(pts,t1,e,o); },
+    lift(x,y,t1){ return this.along([[x,y]],t1,'lin',{width:0,keep:0}); },   // move without drawing: tallies, crosses, letters
     hold(t1){ // stand still until t1: a point at the same place keeps the head from creeping into the next stroke
       if(t1>this.t){ const n=P.X.length-1; pathPush(P,this.x,this.y,t1,n>=0?P.A[n]:this.keep,n>=0?P.Wd[n]:this.width); this.t=t1; }
       return this; }
@@ -141,8 +145,8 @@ function makePen(P,x,y,t){
 }
 /* cut a finished path into Path2D chunks of up to 20 points, breaking at forced indices (covers, dims) */
 function finalizePath(P,breaks=[]){
-  const n=P.X.length, br=new Set(breaks); P.chunks=[]; let c0=0;
-  while(c0<n-1){ let c1=c0+1; while(c1<n-1 && c1-c0<20 && !br.has(c1)) c1++;
+  const n=P.X.length, br=new Set(breaks), up=i=>P.Wd[i]<0.02; P.chunks=[]; let c0=0;   // a chunk is all ink or all lifted pen
+  while(c0<n-1){ let c1=c0+1; while(c1<n-1 && c1-c0<20 && !br.has(c1) && up(c1+1)===up(c0+1)) c1++;
     const p=new Path2D(); p.moveTo(P.X[c0],P.Y[c0]); for(let i=c0+1;i<=c1;i++) p.lineTo(P.X[i],P.Y[i]);
     P.chunks.push({c0,c1,p,tEnd:P.T[c1],keep:P.A[c1],w:P.Wd[c1]}); c0=c1; }
 }
@@ -150,15 +154,15 @@ function finalizePath(P,breaks=[]){
 function headAt(P,f){
   const T=P.T, n=T.length; if(!n) return null;
   if(f<T[0]) return {x:P.X[0],y:P.Y[0],i:-1,started:false};
-  if(f>=T[n-1]) return {x:P.X[n-1],y:P.Y[n-1],i:n-1,started:true};
+  if(f>=T[n-1]) return {x:P.X[n-1],y:P.Y[n-1],i:n-1,started:true,w:P.Wd[n-1]};
   let lo=0,hi=n-1; while(hi-lo>1){ const m=(lo+hi)>>1; if(T[m]<=f) lo=m; else hi=m; }
   const dt=T[hi]-T[lo], u=dt>1e-9?(f-T[lo])/dt:0;
-  return {x:lerp(P.X[lo],P.X[hi],u),y:lerp(P.Y[lo],P.Y[hi],u),i:lo,started:true};
+  return {x:lerp(P.X[lo],P.X[hi],u),y:lerp(P.Y[lo],P.Y[hi],u),i:lo,started:true,w:P.Wd[hi]};   // w: 0 while the pen is lifted
 }
 /* a second line with its own pen (a companion, a new start at the end); drawn like the main one */
 function extraPen(W,x,y,t){ const P=newPath(); W.more.push(P); return makePen(P,x,y,t).start(); }
 
-/* ---- drawing the line into the light layer (world coordinates) ----
+/* ---- drawing the line into the light layer, or onto the picture when LINE_ON is 'paper' (world coordinates) ----
    o: i0,i1 index range; tau frames for a fresh stroke to settle to its memory floor; core, glow widths in SCREEN px
    (divided by k, so a zoom never changes them); gain; color; dims. Each chunk is stroked twice: a wide faint glow and
    a bright core, alpha = A + (1-A)*exp(-age/tau). Only the chunk that holds the head is rebuilt per frame. */
@@ -176,7 +180,7 @@ function drawLine(lg,P,f,k,o={}){
       const full=c.c1<=h.i; let dm=1;
       for(const d of dims) if(c.c0>=d.i0 && c.c0<d.i1) dm*=lerp(1,d.to,ease.sio(span(f,d.f0,d.f1)));
       const a=(c.keep+(1-c.keep)*Math.exp(-(full?f-c.tEnd:0)/tau))*gain*dm;
-      if(a>=0.01){ lg.globalAlpha=pass===0?a*0.2:a; lg.lineWidth=(pass===0?glow:core)*c.w; lg.stroke(full?c.p:partial); }
+      if(a>=0.01 && c.w>=0.02){ lg.globalAlpha=pass===0?a*0.2:a; lg.lineWidth=(pass===0?glow:core)*c.w; lg.stroke(full?c.p:partial); }
       if(!full) break;
     }
   }
@@ -226,8 +230,10 @@ function viewRect(cam,k,m=0){ const hw=LW/2/k+m, hh=LH/2/k+m; return {x0:cam.x-h
 function spotlight(W,f,cam,k,x,y){ const r1=(W.spot?W.spot(f):9)*LH, r0=r1*0.3, d=Math.hypot((x-cam.x)*k,(y-cam.y)*k); return 1-smooth((d-r0)/(r1-r0)); }
 
 /* ---- titles: a small letter-spaced line over a big one, in screen space, at TITLE_Y ----
-   o: align 'left'|'center', y (logical), smallSize, bigSize, smallColor, bigColor; small and big may be functions of the
-   frame (a counter), big may be an array of lines. Never two titles at once in the same place: checkTitles warns. */
+   o: align 'left'|'center', y (logical), smallSize, bigSize, smallColor, bigColor, plate (0..1: a dark rounded plate
+   behind the block, for a light or busy picture), pad; small and big may be functions of the frame (a counter), big may
+   be an array of lines. Never two titles at once in the same place: checkTitles warns. A title whose f0 is below zero
+   is fully visible on frame 0 (a cover). */
 function title(W,f0,f1,small,big,o={}){ W.titles.push(Object.assign({f0,f1,small,big},o)); }
 function checkTitles(W){
   const T=W.titles, Y=t=>t.y??LH*TITLE_Y, name=t=>typeof t.big==='string'?t.big:typeof t.small==='string'?t.small:'(dynamic)';
@@ -236,44 +242,58 @@ function checkTitles(W){
       console.warn(`titles overlap in frames ${Math.max(a.f0,b.f0)}-${Math.min(a.f1,b.f1)}: "${name(a)}" and "${name(b)}"`); }
 }
 function drawTitles(S,W){
-  const g=S.g, f=S.f;
+  const g=S.g, f=S.f, maxW=LW*0.84;
   for(const t of W.titles){
     if(f<t.f0||f>t.f1) continue;
     const a=Math.min(ease.out(span(f,t.f0,t.f0+14)),1-ease.in(span(f,t.f1-16,t.f1))); if(a<=0) continue;
-    const center=t.align==='center', x=center?CX:LW*0.08, maxW=LW*0.84, bs=t.bigSize||60;
+    const center=t.align==='center', x=center?CX:LW*0.08, bs=t.bigSize||60, lines=[];
     const small=typeof t.small==='function'?t.small(f):t.small, big=typeof t.big==='function'?t.big(f):t.big;
-    let y=(t.y??LH*TITLE_Y)+(1-ease.out(span(f,t.f0,t.f0+22)))*12;
-    g.save(); g.globalAlpha=a; g.textAlign=center?'center':'left'; g.textBaseline='alphabetic';
-    g.shadowColor='rgba(0,0,0,0.55)'; g.shadowBlur=14*S.sc;          // shadowBlur ignores the transform: scale it
-    if(small){ let sz=t.smallSize||24; const set=()=>{ g.font=`600 ${sz}px ${FONT_SANS}`; g.letterSpacing=(sz*0.3).toFixed(1)+'px'; };
-      set(); const w=g.measureText(small).width; if(w>maxW){ sz*=maxW/w; set(); }
-      g.fillStyle=t.smallColor||COL.line; g.fillText(small,x,y); g.letterSpacing='0px'; y+=bs*1.08; }
-    if(big) for(const line of [].concat(big)){ let sz=bs; g.font=`italic ${sz}px ${FONT_SERIF}`;
-      const w=g.measureText(line).width; if(w>maxW){ sz*=maxW/w; g.font=`italic ${sz}px ${FONT_SERIF}`; }
-      g.fillStyle=t.bigColor||COL.text; g.fillText(line,x,y); y+=sz*1.15; }
-    g.restore();
+    if(small) lines.push({s:small,size:t.smallSize||24,font:z=>`600 ${z}px ${FONT_SANS}`,ls:0.3,color:t.smallColor||COL.line});
+    for(const L of [].concat(big||[])) lines.push({s:L,size:bs,font:z=>`italic ${z}px ${FONT_SERIF}`,ls:0,color:t.bigColor||COL.text});
+    if(!lines.length) continue;
+    let wmax=0, y=(t.y??LH*TITLE_Y)+(1-ease.out(span(f,t.f0,t.f0+22)))*12;
+    lines.forEach((L,i)=>{ const set=()=>{ g.font=L.font(L.size); g.letterSpacing=(L.size*L.ls).toFixed(1)+'px'; };
+      set(); let w=g.measureText(L.s).width; if(w>maxW){ L.size*=maxW/w; set(); w=g.measureText(L.s).width; } L.w=w; wmax=Math.max(wmax,w);
+      if(i>0) y+=(i===1&&small?bs*1.08:lines[i-1].size*1.15); L.y=y; });
+    g.letterSpacing='0px';
+    g.save(); g.globalAlpha=a;
+    if(t.plate){ const p=t.pad??24, top=lines[0].y-lines[0].size*0.95, bot=y+lines[lines.length-1].size*0.32;
+      g.fillStyle=`rgba(8,8,10,${t.plate})`; g.beginPath(); g.roundRect(center?CX-wmax/2-p:x-p,top-p*0.8,wmax+2*p,bot-top+p*1.6,14); g.fill(); }
+    else { g.shadowColor='rgba(0,0,0,0.55)'; g.shadowBlur=14*S.sc; }          // shadowBlur ignores the transform: scale it
+    g.textAlign=center?'center':'left'; g.textBaseline='alphabetic';
+    for(const L of lines){ g.font=L.font(L.size); g.letterSpacing=(L.size*L.ls).toFixed(1)+'px'; g.fillStyle=L.color; g.fillText(L.s,x,L.y); }
+    g.letterSpacing='0px'; g.restore();
   }
 }
 
-/* ---- one frame of the world: decor, then the light layer (glows, line, head) with bloom, then titles and fades ---- */
+/* ---- one frame of the world: decor, then the light layer (glows, line, head) with bloom, then titles and fades.
+   LINE_ON 'paper' strokes the line onto the picture instead (red on white stays red; added as light it turns white).
+   W.drawHead(g,x,y,S,f), when a builder sets it, draws the tool at the head in screen coordinates: a pencil, a needle. ---- */
 function drawWorld(S){
   const W=getWorld(S.seed), f=S.f, g=S.g, cam=camAt(W,f), k=SHORT/cam.z;
   S.cam=cam; S.k=k;
   g.fillStyle=COL.bg; g.fillRect(0,0,LW,LH);
   g.save(); worldTransform(g,cam,k);
   for(const st of W.sets) if(f>=st.f0 && f<=st.f1) st.draw(g,f,k,cam,S);
+  let h=null;
+  if(LINE_ON==='paper'){ h=drawLine(g,W.path,f,k,{dims:W.dims}); for(const P of W.more) drawLine(g,P,f,k); }
   g.restore();
   // light layer: drawn in world coordinates on its own canvas, added with 'lighter' twice: blurred (bloom), then sharp
   const L=cvs('light',S.cv.width,S.cv.height), lg=wipe(L.getContext('2d'));
   lg.setTransform(S.sc,0,0,S.sc,0,0); lg.save(); worldTransform(lg,cam,k);
   for(const gl of W.glows) if(f>=gl.f0 && f<=gl.f1) gl.draw(lg,f,k,cam,S);
-  const h=drawLineCovered(lg,W,f,k), br=W.headGlow?W.headGlow(f):1;
-  if(h && br>0){ glowDot(lg,h.x,h.y,20/k*br,LINE,0.55*br); glowDot(lg,h.x,h.y,5/k,HEAD,0.95*br); }
-  for(const P of W.more){ const h2=drawLine(lg,P,f,k); if(h2 && h2.started){ glowDot(lg,h2.x,h2.y,20/k,LINE,0.55); glowDot(lg,h2.x,h2.y,5/k,HEAD,0.95); } }
+  if(LINE_ON!=='paper'){ h=drawLineCovered(lg,W,f,k); const br=W.headGlow?W.headGlow(f):1;
+    if(h && br>0){ glowDot(lg,h.x,h.y,20/k*br,LINE,0.55*br); glowDot(lg,h.x,h.y,5/k,HEAD,0.95*br); }
+    for(const P of W.more){ const h2=drawLine(lg,P,f,k); if(h2 && h2.started){ glowDot(lg,h2.x,h2.y,20/k,LINE,0.55); glowDot(lg,h2.x,h2.y,5/k,HEAD,0.95); } } }
   lg.restore();
   g.save(); g.setTransform(1,0,0,1,0,0); g.globalCompositeOperation='lighter';
   g.filter=`blur(${Math.max(2,S.cv.width/170)}px)`; g.globalAlpha=0.85; g.drawImage(L,0,0);
   g.filter='none'; g.globalAlpha=1; g.drawImage(L,0,0); g.restore();
+  if(h && h.started && W.drawHead){ const p=toScreen(cam,k,h.x,h.y); W.drawHead(g,p[0],p[1],S,f); }
+  if(TITLE_SCRIM>0){ let low=0;                                    // darken the lower half while a lower title is up
+    for(const t of W.titles) if((t.y??LH*TITLE_Y)>LH*0.5 && f>=t.f0 && f<=t.f1) low=Math.max(low,Math.min(span(f,t.f0,t.f0+14),1-span(f,t.f1-16,t.f1)));
+    if(low>0){ const sg=g.createLinearGradient(0,LH*0.5,0,LH); sg.addColorStop(0,'rgba(0,0,0,0)'); sg.addColorStop(0.4,`rgba(0,0,0,${0.7*TITLE_SCRIM*low})`);
+      sg.addColorStop(1,`rgba(0,0,0,${TITLE_SCRIM*low})`); g.fillStyle=sg; g.fillRect(0,LH*0.5,LW,LH*0.5); } }
   drawTitles(S,W);
   const fade=Math.max(FADE_IN?1-span(f,0,FADE_IN):0, FADE_OUT?span(f,W.total-FADE_OUT,W.total-1):0);
   if(fade>0){ g.fillStyle=`rgba(0,0,0,${fade})`; g.fillRect(0,0,LW,LH); }
@@ -313,7 +333,7 @@ function buildWorld(seed){
   const W={seed,path:newPath(),more:[],cam:[],titles:[],glows:[],sets:[],covers:[],dims:[],breaks:[],start:{},total:0};
   let acc=0; for(const p of PLATES){ W.start[p.name]=acc; acc+=p.len; } W.total=acc;
   W.at=(name,x=0)=>W.start[name]+x*BEAT;
-  const pen=W.pen=makePen(W.path,0,0,0).start();
+  const pen=W.pen=makePen(W.path,PEN_START[0],PEN_START[1],PEN_START[2]).start();
   for(const p of PLATES){ if(!p.build) continue;
     const t0=W.start[p.name], b=x=>t0+x*BEAT;
     p.build(W,{pen,b,t0,len:p.len,R:rng(hash(seed,'build',p.name))});
@@ -419,13 +439,16 @@ window.RISO={
   frame(n,width,seed){ renderFrame(n,width??WIDTH,seed??SEED,MAIN); return MAIN.toDataURL('image/png'); },
   contact(n,cellW,f0,f1){ contactSheet(n||24,cellW||480,SEED,MAIN,f0??0,f1??TOTAL()-1); return MAIN.toDataURL('image/png'); },
   // per-frame curves for the soundtrack (scripts/export-curves.mjs -> curves.json, read by audio.mjs):
-  // sp head speed on screen (logical px per frame), pan head position on screen (-1 left .. 1 right), z camera.
+  // sp head speed on screen (logical px per frame), pan head position on screen (-1 left .. 1 right), z camera,
+  // w line width at the head (0 while the pen is lifted).
   // Add fields the sound needs (a character on screen, a second head) the same way.
   curves(seed){ const W=getWorld(seed??SEED), frames=[];
     for(let f=0;f<W.total;f++){ const cam=camAt(W,f), k=SHORT/cam.z, a=headAt(W.path,f), p=headAt(W.path,f-1);
       const sp=a&&p&&a.started?Math.hypot(a.x-p.x,a.y-p.y)*k:0;
-      frames.push({f,sp:+sp.toFixed(2),pan:a?+clamp((a.x-cam.x)*k/(LW/2),-1,1).toFixed(3):0,z:+cam.z.toFixed(1)}); }
-    return {fps:FPS,bpm:BPM,total:W.total,start:W.start,frames}; },
+      frames.push({f,sp:+sp.toFixed(2),pan:a?+clamp((a.x-cam.x)*k/(LW/2),-1,1).toFixed(3):0,z:+cam.z.toFixed(1),w:a&&a.w!=null?+a.w.toFixed(2):0}); }
+    // strokes: frames where the pen touches down after a lift (pen.lift), for a tap or a tick in the sound
+    const P=W.path, strokes=[]; for(let i=1;i<P.X.length;i++) if(P.Wd[i]>=0.02 && P.Wd[i-1]<0.02) strokes.push(+P.T[i-1].toFixed(2));
+    return {fps:FPS,bpm:BPM,total:W.total,start:W.start,frames,strokes}; },
   // size of the world, printed by look.mjs info
   stats(seed){ const W=getWorld(seed??SEED); return {points:W.path.X.length,chunks:W.path.chunks.length,camKeys:W.cam.length,
     titles:W.titles.length,glows:W.glows.length,sets:W.sets.length,covers:W.covers.length,dims:W.dims.length,extraLines:W.more.length}; }

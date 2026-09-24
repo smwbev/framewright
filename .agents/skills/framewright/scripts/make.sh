@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
-# Full pipeline: [photo ->] check -> curves -> audio -> frames -> mp4.   ./make.sh [photo.jpg] [seed=7] [width=1920] [tabs=5]
+# Full pipeline: [photo ->] check -> curves -> audio -> frames -> mp4.   ./make.sh [photo.jpg] [seed=7] [width] [tabs=5]
+# width: leave it out and render.mjs takes 1920 for a landscape page, 1080 for a portrait one
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
-PHOTO=${1:-}; SEED=${2:-7}; WIDTH=${3:-1920}; TABS=${4:-5}
+PHOTO=${1:-}; SEED=${2:-7}; WIDTH=${3:-}; TABS=${4:-5}
 if [ -n "$PHOTO" ]; then "$HERE/portrait.sh" "$PHOTO"; fi
 # gate: frames do not depend on render order, the page loads nothing, the source has no clock or Math.random (SKIP_CHECK=1 skips)
 if [ -z "${SKIP_CHECK:-}" ] && [ -f "$HERE/check.mjs" ]; then node "$HERE/check.mjs" "$SEED"; fi

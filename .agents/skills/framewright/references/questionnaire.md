@@ -36,7 +36,8 @@ infer; confirm the inference instead.
 ## Block C: only when relevant
 
 9. **Deliverables.** a) MP4 only [default] b) plus a vertical cut c) plus a GIF for chats
-   d) plus a poster frame e) plus two or three seed variations of a key frame.
+   d) plus a poster frame e) plus two or three seed variations of a key frame f) the cover as the
+   first frame of the MP4, for feeds that show frame 0 as the preview (often asked together with d).
 10. **Quality and deadline.** a) quick draft: fewer scenes, 1280 px, no sound b) final
     [default]. A draft is a legitimate deliverable when the user wants to see direction first.
 11. **Avoid.** Colours, clichés, brands, jokes that would land badly.

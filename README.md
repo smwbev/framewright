@@ -1,7 +1,7 @@
 <h1 align="center">framewright</h1>
 
 <p align="center">
-  <a href="https://github.com/smwbev/framewright/releases"><img src="https://img.shields.io/badge/version-1.2.0-08C?style=flat" alt="Version 1.2.0" /></a>
+  <a href="https://github.com/smwbev/framewright/releases"><img src="https://img.shields.io/badge/version-1.2.1-08C?style=flat" alt="Version 1.2.1" /></a>
   <a href="https://agentskills.io"><img src="https://img.shields.io/badge/agent%20skill-agentskills.io-08C?style=flat" alt="Follows the Agent Skills specification" /></a>
   <a href="https://agents.md"><img src="https://img.shields.io/badge/AGENTS.md-ready-08C?style=flat" alt="Ships an AGENTS.md" /></a>
   <img src="https://img.shields.io/badge/agents-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Gemini%20CLI%20%C2%B7%20Cursor-4493F8?style=flat" alt="Works with Claude Code, Codex, Gemini CLI, Cursor and more" />

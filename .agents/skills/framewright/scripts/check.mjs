@@ -65,7 +65,7 @@ const hash = u => crypto.createHash('sha1').update(u).digest('hex').slice(0, 12)
 try {
   const p0 = await open();
   const film = await p0.evaluate(() => ({ total: window.RISO.total, fps: window.RISO.fps ?? 30, plates: window.RISO.plates,
-    beat: typeof BEAT !== 'undefined' ? BEAT : null, bpm: typeof BPM !== 'undefined' ? BPM : null }));
+    beat: typeof BEAT !== 'undefined' ? BEAT : null, bpm: typeof BPM !== 'undefined' ? BPM : null, ar: typeof AR !== 'undefined' ? AR : null }));
 
   /* ---- timeline ---- */
   let acc = 0; const starts = film.plates.map(pl => { const s = acc; acc += pl.len; return s; });
@@ -133,7 +133,8 @@ try {
   });
 
   /* ---- time per frame at full width ---- */
-  const m = /^(\d+(?:\.\d+)?)[:x\/](\d+(?:\.\d+)?)$/.exec(AR), FW = m && +m[1] < +m[2] ? 1080 : 1920, tms = [];
+  const m = /^(\d+(?:\.\d+)?)[:x\/](\d+(?:\.\d+)?)$/.exec(AR), vertical = m ? +m[1] < +m[2] : film.ar != null && film.ar < 1;   // env AR, else the page's own aspect
+  const FW = vertical ? 1080 : 1920, tms = [];
   for (const f of [F[0], F[Math.floor(F.length / 2)], F[F.length - 1]]) { const t0 = Date.now(); await p0.evaluate((f, w, s) => window.RISO.frame(f, w, s), f, FW, seed); tms.push(Date.now() - t0); }
   const ms = tms.reduce((a, c) => a + c, 0) / tms.length;
   info('time', `one ${FW} px frame takes ~${Math.round(ms)} ms: the full render is about ${Math.max(0.1, Math.round(ms * film.total / 5 / 6000) / 10)} min with 5 tabs`);

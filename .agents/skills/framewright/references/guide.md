@@ -217,6 +217,10 @@ CRF 17 is five times larger with no visible gain on a contact sheet. Keep delive
 50 MB for messengers. Verify the MP4: `ffprobe` frame count equals `RISO.total`, duration
 equals frames / 30, a tile made from the file matches the sheet.
 
+A film made vertical from the start sets its page's default aspect
+(`parseAR(Q.get('ar') || '9:16')`), so every script renders it vertical without `AR`; `render.mjs`
+without a width then takes 1080, and `check.mjs` times the frame at that width.
+
 For a vertical cut, composition needs its own sheet: `fit` saves the text, not the layout.
 Platform UI covers the top 15 % and bottom 20 % of vertical video: lower titles go up to 70 %
 of the height (`TITLE_Y` does it when the aspect is vertical). One soundtrack serves both cuts.
