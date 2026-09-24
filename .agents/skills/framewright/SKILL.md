@@ -5,7 +5,7 @@ license: MIT
 compatibility: Node 20+, Chrome via Puppeteer, ffmpeg with libx264. Python 3 with numpy, scipy and Pillow only for photo tracing. macOS and Linux; Windows through WSL.
 metadata:
   author: smwbev
-  version: "1.1.0"
+  version: "1.2.0"
   homepage: https://github.com/smwbev/framewright
 ---
 
@@ -27,7 +27,8 @@ scripts also live in the project's own `scripts/` folder.
 ## Non-negotiables
 
 1. A frame depends only on frame number, seed and output width. No `Math.random`, no wall
-   clock, no CSS animation, no `requestAnimationFrame` as a time source.
+   clock, no CSS animation, no `requestAnimationFrame` as a time source. `scripts/check.mjs`
+   proves it before every full render.
 2. No image, video, font or library files, no base64, no CDN. Polygons traced from a photo
    by a script are data and are fine. System fonts are enough.
 3. You verify by looking at rendered frames, never by reading code and imagining. Any fix is
@@ -180,9 +181,19 @@ the scene on the synthetic placeholder that ships in the skeleton and say so.
 
 ```bash
 node scripts/look.mjs sheet 24 480 7 shots/sheet.png      # look at it, fix, repeat
+node scripts/check.mjs                                    # determinism and self-containment, must say OK
 node scripts/render.mjs frames 7 1920 5                   # dir, seed, width, tabs
 bash scripts/build.sh out.mp4                             # frames (+ track.wav) -> mp4
 ```
+
+The check renders five frames of every plate in seven orders (first frame of a new tab,
+forward, backward, shuffled, right after the previous frame, after another width, after a
+sweep over the film the way a render tab walks it) and demands identical pixels. It also scans
+the source for `Math.random`, `Date` and `performance.now`, fails when the page requests any
+file, and prints the beat grid and the expected render time. Fix every FAIL before rendering;
+`make.sh` runs the check and stops on a failure. A frame that changes with render order points at
+state that survives a frame: a pooled canvas drawn without clearing, a global a plate changes, a
+cache keyed without all its inputs.
 
 Verify from the file, not from the frames: `ffprobe` frame count equals the total from
 `look.mjs info`, duration equals frames divided by 30, and a tile made from the MP4 matches
@@ -253,3 +264,5 @@ in time and the pen carries its end point over: reshoot the boundary frames
   starts and per-frame curves for the sound.
 - `../../examples/ris-tv/` in the repository: a finished 40-second video with eight plates,
   sound and a portrait pipeline, to read as a worked example.
+- `../../examples/honeybee/` in the repository: a finished 56-second film in one take, the
+  one-world method at full scale with sound driven by the line.

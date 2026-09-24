@@ -54,10 +54,23 @@ See `photo.md`, section 3.
 | a voice that follows the picture zippers | controls jump every frame | smooth amplitude and pan over 20–30 ms (`follow` does) |
 | the follow voice drones at one level | `sMax` too low, the curve saturates | raise `sMax` to the speed of a brisk stroke; read `sp` in `curves.json` |
 
+## The check
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| a frame changes with render order | state that survives a frame: a pooled canvas drawn without clearing, a global a plate changes, a cache keyed without all its inputs | wipe or clear offscreen canvases before drawing, keep state in `S`, `R` or `W`, key caches by every input |
+| only "after a sweep" differs | one frame leaves state behind (a `save()` without `restore()`, a clip) in a page without `wipe` | wipe the context at the start of `renderFrame` (both skeletons do) |
+| only "fresh" differs | the first frame of a tab builds something lazily and draws before it is ready | build caches and worlds before drawing, not halfway through a frame |
+| "the page requests …" | an image, font, stylesheet or script from outside | draw it in code; a photo becomes polygons |
+| "calls Date" or "calls Math.random" | a clock or randomness outside the seed | use the frame number and the plate's generators |
+| "the page stops on an error while it loads" | a plate throws on the first frame, or a frozen value was edited | read the error, fix the plate |
+
 ## Render and files
 
 | Symptom | Cause | Fix |
 |---|---|---|
+| colours in the player differ from the PNG frames | an MP4 converted with BT.601 and no matrix tag | rebuild with the current `build.sh`: BT.709 matrix, tagged |
+| the first frames of each render tab differ slightly from the rest | an accelerated canvas switches to software after readbacks | the scripts start Chrome with `--disable-accelerated-2d-canvas`; keep that flag in any script of your own |
 | render slow | per-pixel pass without cached maps or too large a blur | cache maps per resolution, blur radius `W/220` or less, 4–6 tabs |
 | MP4 huge | CRF 17 on noise | CRF 22 with a 14 Mbit/s cap (`build.sh` default) |
 | MP4 does not play on a phone | not yuv420p or an odd dimension | `build.sh` handles both; do not encode by hand |

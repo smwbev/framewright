@@ -1,0 +1,860 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Одна линия · жизнь пчелы</title>
+<style>
+html,body{margin:0;height:100%;background:#000;overflow:hidden}
+canvas{display:block;margin:0 auto;max-width:100vw;max-height:100vh}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+/* =====================================================================
+   ОДНА ЛИНИЯ. Жизнь рабочей пчелы за 40 дней, нарисованная одной
+   непрерывной золотой линией. Кадр = чистая функция (кадр, сид, ширина).
+   Ручки:  ?f=140  ?s=12  ?w=1920  ?grid=24  ?cw=480  ?ar=16:9
+   Порядок файла: параметры, генераторы, математика, палитра, хелперы
+   (мир, линия, камера, рисование), движок, сцены, запуск.
+   ===================================================================== */
+
+/* ---------- параметры ---------- */
+const Q = new URLSearchParams(location.search);
+const FPS = 30, BPM = 90;
+const BEAT = Math.round(FPS * 60 / BPM), BAR = BEAT * 4;   // 90 BPM: доля 20 кадров, такт 80
+const SHORT = 1080;
+function parseAR(s){ const m=/^(\d+(?:\.\d+)?)[:x\/](\d+(?:\.\d+)?)$/.exec(s||''); return m ? (+m[1])/(+m[2]) : 16/9; }
+const AR = parseAR(Q.get('ar') || '16:9');
+const LW = AR >= 1 ? Math.round(SHORT*AR) : SHORT;
+const LH = AR >= 1 ? SHORT : Math.round(SHORT/AR);
+const CX = LW/2, CY = LH/2;
+const SEED  = +(Q.get('s') || 7);
+const WIDTH = +(Q.get('w') || 1920);
+const SAFE  = 0.08;
+const TITLE_Y = AR<1 ? 0.70 : 0.80;   // в вертикали низ кадра закрыт интерфейсом площадок
+const TAU = Math.PI * 2;
+
+/* ---------- генераторы ---------- */
+function hash(){
+  let h = 2166136261 >>> 0;
+  for (let k=0;k<arguments.length;k++){ const s=String(arguments[k])+'|';
+    for (let i=0;i<s.length;i++){ h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } }
+  h ^= h>>>13; h = Math.imul(h, 0x5bd1e995); h ^= h>>>15;
+  return h >>> 0;
+}
+function rng(seed){ // sfc32
+  let a=seed>>>0, b=0x9e3779b9, c=0x6a09e667, d=0xbb67ae85;
+  const f=()=>{ a>>>=0;b>>>=0;c>>>=0;d>>>=0; let t=(a+b)|0; a=b^(b>>>9); b=(c+(c<<3))|0; c=(c<<21)|(c>>>11); d=(d+1)|0; t=(t+d)|0; c=(c+t)|0; return (t>>>0)/4294967296; };
+  for(let i=0;i<12;i++) f();
+  return {
+    f, r:(lo,hi)=>lo+(hi-lo)*f(), i:(n)=>Math.floor(f()*n), pick:(arr)=>arr[Math.floor(f()*arr.length)],
+    sign:()=>f()<0.5?-1:1, chance:(p)=>f()<p,
+    g:()=>{ let u=0,v=0; while(u===0)u=f(); while(v===0)v=f(); return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v); }
+  };
+}
+
+/* ---------- математика ---------- */
+const clamp=(v,a=0,b=1)=>v<a?a:v>b?b:v;
+const lerp=(a,b,t)=>a+(b-a)*t;
+const span=(f,a,b)=>clamp((f-a)/(b-a));
+const smooth=t=>{t=clamp(t);return t*t*(3-2*t)};
+const ease={
+  out:t=>1-Math.pow(1-clamp(t),3), in:t=>Math.pow(clamp(t),3),
+  io:t=>{t=clamp(t);return t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2},
+  sio:t=>0.5-0.5*Math.cos(Math.PI*clamp(t)),
+  sout:t=>Math.sin(Math.PI/2*clamp(t)), sin:t=>1-Math.cos(Math.PI/2*clamp(t)),
+  back:t=>{const c=1.70158;t=clamp(t);return 1+(c+1)*Math.pow(t-1,3)+c*Math.pow(t-1,2)},
+  lin:t=>clamp(t)
+};
+function invEase(e,u){ // время по доле пути: обратная функция к easing
+  if(e==='lin') return u;
+  const fn=ease[e]||ease.lin; let lo=0,hi=1;
+  for(let k=0;k<24;k++){ const m=(lo+hi)/2; if(fn(m)<u) lo=m; else hi=m; }
+  return (lo+hi)/2;
+}
+const pad=(n,w=2)=>String(n).padStart(w,'0');
+const mix3=(a,b,t)=>[lerp(a[0],b[0],t),lerp(a[1],b[1],t),lerp(a[2],b[2],t)];
+const rgb=(c,a=1)=>`rgba(${c[0]|0},${c[1]|0},${c[2]|0},${a})`;
+function hex2rgb(h){ const n=parseInt(h.slice(1),16); return [(n>>16)&255,(n>>8)&255,n&255]; }
+
+/* ---------- холсты ---------- */
+const POOL={};
+function cvs(name,w,h){ let c=POOL[name]; if(!c){ c=document.createElement('canvas'); POOL[name]=c; } if(c.width!==w||c.height!==h){ c.width=w; c.height=h; } return c; }
+
+/* ---------- палитра ---------- */
+const COL={
+  dark:'#0d0904', hive:'#110b05', gold:'#ffc44d', goldDeep:'#e8a53a', head:'#fff3c4',
+  wax:'#6b4c22', waxDim:'#3d2b12', honey:'#d8901c', cream:'#f3e6c4',
+  pink:'#ff8fb1', pollen:'#ffe38a', leaf:'#5d7a33', ground:'#120e07'
+};
+const SERIF='"Iowan Old Style", Palatino, "PT Serif", Georgia, serif';
+
+/* =====================================================================
+   ХЕЛПЕРЫ (все выше блока сцен)
+   ===================================================================== */
+
+/* ---- соты: шестиугольники с вершиной вверх ---- */
+const HEX_R=10, HEX_W=Math.sqrt(3)*HEX_R, HEX_H=1.5*HEX_R;
+function hexCenter(col,row){ return [col*HEX_W + ((row & 1) ? HEX_W/2 : 0), row*HEX_H]; }
+function hexPts(cx,cy,r=HEX_R){ const p=[]; for(let i=0;i<6;i++){ const a=-Math.PI/2+i*Math.PI/3; p.push([cx+r*Math.cos(a), cy+r*Math.sin(a)]); } return p; }
+function hexPath(g,cx,cy,r=HEX_R){ const p=hexPts(cx,cy,r); g.moveTo(p[0][0],p[0][1]); for(let i=1;i<6;i++) g.lineTo(p[i][0],p[i][1]); g.closePath(); }
+
+/* ---- линия жизни: точки с временем прорисовки ----
+   X,Y мировые координаты, T кадр, когда голова проходит точку,
+   A нижний порог яркости (память), Wd множитель толщины. */
+function newPath(){ return {X:[],Y:[],T:[],A:[],Wd:[],chunks:null}; }
+function pathPush(P,x,y,t,a,w){ P.X.push(x); P.Y.push(y); P.T.push(t); P.A.push(a); P.Wd.push(w); }
+function makePen(P,x,y,t){
+  const pen={ P, x, y, t, keep:0.25, width:1, step:0.5,
+    start(){ pathPush(P,this.x,this.y,this.t,this.keep,this.width); return this; },
+    // провести линию по ломаной pts (текущая точка не входит), прибыть к кадру t1
+    along(pts,t1,e='sio',o={}){
+      const src=[[this.x,this.y],...pts], cum=[0]; let L=0;
+      for(let i=1;i<src.length;i++){ L+=Math.hypot(src[i][0]-src[i-1][0],src[i][1]-src[i-1][1]); cum.push(L); }
+      if(L<1e-6){ this.t=t1; return this; }
+      const step=o.step??this.step, n=Math.max(1,Math.ceil(L/step)); let j=1;
+      for(let s=1;s<=n;s++){
+        const a=L*s/n; while(j<src.length-1 && cum[j]<a) j++;
+        const u0=cum[j-1],u1=cum[j],fr=(u1-u0)>1e-9?(a-u0)/(u1-u0):1;
+        let x=lerp(src[j-1][0],src[j][0],fr), y=lerp(src[j-1][1],src[j][1],fr);
+        const u=a/L;
+        if(o.warp){ const d=o.warp(u,x,y); x+=d[0]; y+=d[1]; }
+        const t=this.t+(t1-this.t)*invEase(e,u);
+        const keep=typeof o.keep==='function'?o.keep(u):(o.keep??this.keep);
+        const w=typeof o.width==='function'?o.width(u):(o.width??this.width);
+        pathPush(P,x,y,t,keep,w);
+      }
+      const last=P.X.length-1; this.x=P.X[last]; this.y=P.Y[last]; this.t=t1;
+      return this;
+    },
+    to(x,y,t1,e,o){ return this.along([[x,y]],t1,e,o); },
+    bez(c1,c2,p2,t1,e,o){ const p0=[this.x,this.y], pts=[], n=48;
+      for(let i=1;i<=n;i++){ const s=i/n, m=1-s;
+        pts.push([m*m*m*p0[0]+3*m*m*s*c1[0]+3*m*s*s*c2[0]+s*s*s*p2[0], m*m*m*p0[1]+3*m*m*s*c1[1]+3*m*s*s*c2[1]+s*s*s*p2[1]]); }
+      return this.along(pts,t1,e,o); },
+    hold(t1){ this.t=Math.max(this.t,t1); return this; }
+  };
+  return pen;
+}
+function finalizePath(P,breaks=[]){
+  const n=P.X.length, CH=20; P.chunks=[]; const br=new Set(breaks);
+  let c0=0;
+  while(c0<n-1){ let c1=c0+1; while(c1<n-1 && c1-c0<CH && !br.has(c1)) c1++;
+    const p=new Path2D(); p.moveTo(P.X[c0],P.Y[c0]); for(let i=c0+1;i<=c1;i++) p.lineTo(P.X[i],P.Y[i]);
+    P.chunks.push({c0,c1,p,tEnd:P.T[c1],keep:P.A[c1],w:P.Wd[c1]}); c0=c1; }
+}
+function headAt(P,f){ // голова линии в кадре f: точка, индекс, доля отрезка
+  const T=P.T, n=T.length; if(!n) return null;
+  if(f<T[0]) return {x:P.X[0],y:P.Y[0],i:-1,started:false};
+  if(f>=T[n-1]) return {x:P.X[n-1],y:P.Y[n-1],i:n-1,started:true};
+  let lo=0,hi=n-1; while(hi-lo>1){ const m=(lo+hi)>>1; if(T[m]<=f) lo=m; else hi=m; }
+  const dt=T[hi]-T[lo], u=dt>1e-9?(f-T[lo])/dt:0;
+  return {x:lerp(P.X[lo],P.X[hi],u), y:lerp(P.Y[lo],P.Y[hi],u), i:lo, started:true};
+}
+function headDir(P,f){ const a=headAt(P,f-3), b=headAt(P,f); if(!a||!b) return 0; const dx=b.x-a.x, dy=b.y-a.y; return Math.hypot(dx,dy)<1e-4?null:Math.atan2(dy,dx); }
+function beeAngle(P,f,def=-Math.PI/2){
+  const b=headAt(P,f); if(!b) return def;
+  for(let d=2;d<=60;d+=2){ const a=headAt(P,f-d); if(a && Math.hypot(b.x-a.x,b.y-a.y)>0.25) return Math.atan2(b.y-a.y,b.x-a.x); }
+  return def;
+}
+function drawPupa(g,x,y,s,a){ // бледный силуэт куколки головой вверх, s в мировых единицах
+  if(a<=0.01) return; g.save(); g.translate(x,y); g.globalAlpha=a; const c='#f6ead0';
+  g.fillStyle=c; g.strokeStyle=c; g.lineCap='round';
+  g.beginPath(); g.ellipse(0,s*0.20,s*0.17,s*0.30,0,0,TAU); g.fill();            // брюшко
+  g.beginPath(); g.ellipse(0,-s*0.15,s*0.15,s*0.12,0,0,TAU); g.fill();           // грудь
+  g.beginPath(); g.ellipse(0,-s*0.34,s*0.10,s*0.09,0,0,TAU); g.fill();           // голова
+  g.lineWidth=s*0.028;
+  for(const sd of [-1,1]){
+    g.beginPath(); g.moveTo(sd*s*0.05,-s*0.41); g.quadraticCurveTo(sd*s*0.16,-s*0.30,sd*s*0.09,-s*0.12); g.stroke(); // усики
+    for(let q=0;q<3;q++){ g.beginPath(); g.moveTo(sd*s*0.10,-s*(0.2-q*0.06)); g.lineTo(sd*s*(0.21+q*0.02),-s*(0.12-q*0.1)); g.stroke(); } // лапки
+    g.globalAlpha=a*0.55; g.beginPath(); g.ellipse(sd*s*0.19,-s*0.02,s*0.07,s*0.2,sd*0.3,0,TAU); g.fill(); g.globalAlpha=a; // зачатки крыльев
+  }
+  g.strokeStyle='rgba(110,78,40,0.85)'; g.lineWidth=s*0.03;
+  for(const yy of [0.04,0.14,0.24,0.34]){ const w=s*0.17*Math.sqrt(Math.max(0,1-Math.pow((yy-0.2)/0.3,2))); g.beginPath(); g.moveTo(-w,s*yy); g.lineTo(w,s*yy); g.stroke(); }
+  g.restore();
+}
+function headSpeed(P,f){ const a=headAt(P,f-2), b=headAt(P,f); if(!a||!b) return 0; return Math.hypot(b.x-a.x,b.y-a.y)/2; }
+
+/* ---- камера: ключи + следование за головой + гауссово сглаживание ----
+   z = сколько мировых единиц помещается по короткой стороне кадра. */
+function camKey(W,f,x,y,z,o={}){ W.cam.push({f,x,y,z,w:o.w??0,e:o.e??'sio',lag:o.lag??8,ox:o.ox??0,oy:o.oy??0}); }
+function camRaw(W,f){
+  const K=W.cam; let a=K[0], b=K[0], u=0;
+  if(f>=K[K.length-1].f){ a=b=K[K.length-1]; }
+  else if(f>K[0].f){ for(let i=1;i<K.length;i++){ if(f<K[i].f){ a=K[i-1]; b=K[i]; u=(ease[b.e]||ease.lin)((f-a.f)/(b.f-a.f)); break; } } }
+  let x=lerp(a.x,b.x,u), y=lerp(a.y,b.y,u); const z=Math.exp(lerp(Math.log(a.z),Math.log(b.z),u));
+  const w=lerp(a.w,b.w,u);
+  if(w>0){ const h=headAt(W.path,f-lerp(a.lag,b.lag,u)); if(h){ x=lerp(x,h.x+lerp(a.ox,b.ox,u),w); y=lerp(y,h.y+lerp(a.oy,b.oy,u),w); } }
+  return {x,y,z};
+}
+function camAt(W,f){
+  let sx=0,sy=0,sz=0,sw=0; const sig=6;
+  for(let d=-18;d<=18;d+=2){ const wt=Math.exp(-(d*d)/(2*sig*sig)), c=camRaw(W,f+d); sx+=c.x*wt; sy+=c.y*wt; sz+=Math.log(c.z)*wt; sw+=wt; }
+  return {x:sx/sw, y:sy/sw, z:Math.exp(sz/sw)};
+}
+function toScreen(cam,k,x,y){ return [(x-cam.x)*k+CX,(y-cam.y)*k+CY]; }
+function worldTransform(g,cam,k){ g.translate(CX,CY); g.scale(k,k); g.translate(-cam.x,-cam.y); }
+
+/* ---- декорация: соты. Расплод в центре, кольцо пыльцы, мёд наверху ---- */
+function oddrToCube(col,row){ const x=col-((row-(row&1))/2); return [x,-x-row,row]; }
+function hexDist(c1,r1,c2,r2){ const a=oddrToCube(c1,r1), b=oddrToCube(c2,r2); return Math.max(Math.abs(a[0]-b[0]),Math.abs(a[1]-b[1]),Math.abs(a[2]-b[2])); }
+const COMB={ x0:-385, x1:385, y0:-250, y1:186, notch:[[0,12],[1,12],[2,12],[-1,12]] };
+function buildComb(W,R){
+  W.cells=[]; W.cellMap=new Map();
+  for(let row=-17;row<=13;row++) for(let col=-24;col<=24;col++){
+    const [x,y]=hexCenter(col,row);
+    if(x<COMB.x0||x>COMB.x1||y<COMB.y0) continue;
+    const yMax=COMB.y1-10*Math.abs(Math.sin(x/64))-(Math.abs(x)>300?(Math.abs(x)-300)*0.6:0);
+    if(y>yMax) continue;
+    if(COMB.notch.some(([c,r])=>c===col&&r===row)) continue;
+    const e=Math.hypot(x/165,(y-25)/112), d=hexDist(0,0,col,row);
+    let type='empty', size=0;
+    if(col===0&&row===0) type='birth';
+    else if(e<1){ const p=R.f(); type=p<0.5?'larva':p<0.82?'capped':'empty'; size=R.r(0.35,1); }
+    else if(e<1.32){ type=R.chance(0.72)?'pollen':'empty'; }
+    else if(y<-40){ type=R.chance(0.62)?'honeyCap':(R.chance(0.8)?'honey':'empty'); }
+    else type=R.chance(0.08)?'honey':'empty';
+    const c={col,row,x,y,d,type,size,appear:0,lit:[],fillT:null,seedA:R.f()};
+    W.cells.push(c); W.cellMap.set(col+','+row,c);
+  }
+}
+function cellAt(W,col,row){ return W.cellMap.get(col+','+row); }
+const WAX=hex2rgb('#34230f'), CELL_IN=hex2rgb('#120b05'), HONEY=hex2rgb('#c07a18'), HONEY_CAP=hex2rgb('#a3824a'),
+      BROOD_CAP=hex2rgb('#3f2c15'), POLLEN=hex2rgb('#7d5716'), LARVA=hex2rgb('#f3e2b8');
+let SPIRAL_UNIT=null;
+function spiralUnit(){ if(SPIRAL_UNIT) return SPIRAL_UNIT; const p=new Path2D(); const n=160;
+  for(let i=0;i<=n;i++){ const u=i/n, th=Math.PI/2+u*3.2*TAU, r=0.08+0.92*Math.pow(u,0.85); const x=r*Math.cos(th), y=r*Math.sin(th); if(i) p.lineTo(x,y); else p.moveTo(x,y); }
+  return SPIRAL_UNIT=p; }
+function drawComb(g,W,f,cam,k){
+  const hw=(LW/2)/k+HEX_W, hh=(LH/2)/k+HEX_W;
+  const ri=HEX_R*0.9, light=W.combLight?W.combLight(f):1, spot=W.spot?W.spot(f):9;
+  if(light<=0) return;
+  const r1=spot*LH, r0=r1*0.3;
+  for(const c of W.cells){
+    if(c.x<cam.x-hw||c.x>cam.x+hw||c.y<cam.y-hh||c.y>cam.y+hh) continue;
+    const ds=Math.hypot((c.x-cam.x)*k,(c.y-cam.y)*k);
+    const a=clamp((f-c.appear)/40)*light*(1-smooth((ds-r0)/(r1-r0))); if(a<=0.004) continue;
+    // воск стенок и донце ячейки
+    g.fillStyle=rgb(WAX,a); g.beginPath(); hexPath(g,c.x,c.y,HEX_R+0.05); g.fill();
+    g.fillStyle=rgb(CELL_IN,a); g.beginPath(); hexPath(g,c.x,c.y,ri); g.fill();
+    let t=c.type;
+    if(c.fillT && f>=c.fillT[0]){ // ячейку заливают мёдом
+      const u=ease.sio(span(f,c.fillT[0],c.fillT[1]));
+      g.fillStyle=rgb(HONEY,a*0.85*u); g.beginPath(); hexPath(g,c.x,c.y,ri*(0.35+0.65*u)); g.fill();
+    }
+    if(t==='larva'){ g.save(); g.translate(c.x,c.y); const s=ri*0.72*c.size; g.scale(s,s); g.rotate(c.seedA*TAU);
+      g.strokeStyle=rgb(LARVA,0.15*a); g.lineWidth=1.8/(k*s); g.stroke(spiralUnit()); g.restore(); }
+    else if(t==='capped'){ g.fillStyle=rgb(BROOD_CAP,0.9*a); g.beginPath(); hexPath(g,c.x,c.y,ri*0.97); g.fill();
+      g.fillStyle=`rgba(255,220,150,${0.035*a})`; g.beginPath(); g.arc(c.x-2,c.y-2.5,ri*0.45,0,TAU); g.fill(); }
+    else if(t==='pollen'){ g.fillStyle=rgb(POLLEN,0.75*a); g.beginPath(); hexPath(g,c.x,c.y,ri*0.9); g.fill();
+      g.fillStyle=`rgba(255,200,90,${0.2*a})`; for(let q=0;q<3;q++){ const an=c.seedA*TAU+q*2.1; g.beginPath(); g.arc(c.x+Math.cos(an)*3.4,c.y+Math.sin(an)*3.4,1.2,0,TAU); g.fill(); } }
+    else if(t==='honey'){ const gr=g.createRadialGradient(c.x-2.5,c.y-3,0.5,c.x,c.y,ri);
+      gr.addColorStop(0,`rgba(255,196,90,${0.95*a})`); gr.addColorStop(1,rgb(HONEY,0.9*a));
+      g.fillStyle=gr; g.beginPath(); hexPath(g,c.x,c.y,ri*0.96); g.fill(); }
+    else if(t==='honeyCap'){ g.fillStyle=rgb(HONEY_CAP,0.8*a); g.beginPath(); hexPath(g,c.x,c.y,ri*0.98); g.fill();
+      g.fillStyle=`rgba(255,240,200,${0.05*a})`; g.beginPath(); g.arc(c.x-2,c.y-2.5,ri*0.5,0,TAU); g.fill(); }
+  }
+}
+
+/* ---- улей-срез, поле до горизонта, небо по времени суток ---- */
+const HIVE={x0:-420,x1:420,y0:-270,y1:300,wall:12,ent:[248,292],roofY:-362,legX:360,ground:380};
+const HORIZON=-60;
+const SKY=[ // кадр: верх неба, середина, у горизонта, дальнее поле, ближнее поле
+  {f:0,    top:'#090c16',mid:'#181c30',hor:'#43302f',far:'#26261a',near:'#0d0e08'},
+  {f:720,  top:'#0a0d19',mid:'#1c2036',hor:'#56383a',far:'#2b2a1d',near:'#0e0f09'},
+  {f:860,  top:'#18264a',mid:'#4a4c6c',hor:'#e2a466',far:'#5c4c30',near:'#14140b'},
+  {f:1000, top:'#1d4267',mid:'#4b7a90',hor:'#e3cf9e',far:'#6b7446',near:'#181b0d'},
+  {f:1200, top:'#23405f',mid:'#5d7688',hor:'#ebc488',far:'#6f6a3e',near:'#18190c'},
+  {f:1330, top:'#261d3c',mid:'#6b3a58',hor:'#f39a48',far:'#6e4526',near:'#150f08'},
+  {f:1440, top:'#1b1433',mid:'#5d2b4c',hor:'#f07e3a',far:'#5f3520',near:'#120c07'},
+  {f:1540, top:'#0a0c1b',mid:'#242344',hor:'#63393f',far:'#261c18',near:'#0b0906'},
+  {f:1680, top:'#05070f',mid:'#10142a',hor:'#2a2230',far:'#15110e',near:'#080706'}];
+const SKYRGB=SKY.map(k=>({f:k.f,top:hex2rgb(k.top),mid:hex2rgb(k.mid),hor:hex2rgb(k.hor),far:hex2rgb(k.far),near:hex2rgb(k.near)}));
+function skyAt(f){ let a=SKYRGB[0], b=SKYRGB[0], u=0;
+  for(let i=1;i<SKYRGB.length;i++){ if(f<SKYRGB[i].f){ a=SKYRGB[i-1]; b=SKYRGB[i]; u=ease.sio((f-a.f)/(b.f-a.f)); break; } a=b=SKYRGB[i]; }
+  const o={}; for(const key of ['top','mid','hor','far','near']) o[key]=mix3(a[key],b[key],u); return o; }
+function drawLandscape(g,W,f,cam,k){
+  const x0=cam.x-(LW/2)/k-20, x1=cam.x+(LW/2)/k+20, y0=cam.y-(LH/2)/k-20, y1=cam.y+(LH/2)/k+20;
+  if(x0>HIVE.x0&&x1<HIVE.x1&&y0>HIVE.y0&&y1<HIVE.y1) return; // камера внутри улья: снаружи ничего не видно
+  W.skyVisible=true;
+  const sk=skyAt(f);
+  if(y0<HORIZON){ const gr=g.createLinearGradient(0,HORIZON,0,HORIZON-2800);
+    gr.addColorStop(0,rgb(sk.hor)); gr.addColorStop(0.16,rgb(sk.mid)); gr.addColorStop(1,rgb(sk.top));
+    g.fillStyle=gr; g.fillRect(x0,y0,x1-x0,HORIZON-y0); }
+  if(y1>HORIZON){ const gr=g.createLinearGradient(0,HORIZON,0,HORIZON+700);
+    gr.addColorStop(0,rgb(sk.far)); gr.addColorStop(0.08,rgb(mix3(sk.far,sk.near,0.55))); gr.addColorStop(1,rgb(sk.near));
+    g.fillStyle=gr; g.fillRect(x0,HORIZON,x1-x0,y1-HORIZON);
+    // дальняя кромка леса и холмы у горизонта
+    g.fillStyle=rgb(mix3(sk.far,sk.top,0.35)); g.beginPath(); g.moveTo(x0,HORIZON);
+    for(let x=Math.floor(x0/40)*40;x<=x1+40;x+=40){ const hgt=10+7*Math.sin(x*0.013)+5*Math.sin(x*0.041+1.3)+(Math.sin(x*0.0021)>0.4?12:0); g.lineTo(x,HORIZON-hgt); }
+    g.lineTo(x1+40,HORIZON+2); g.lineTo(x0,HORIZON+2); g.closePath(); g.fill();
+  }
+}
+function drawSun(g,W,f,cam,k){ // солнце держится над горизонтом в экранных координатах, как бесконечно далёкое
+  if(!W.sun) return; const sv=W.sun(f); if(!sv||sv.a<=0) return;
+  const hy=(HORIZON-cam.y)*k+CY, x=LW*sv.x, y=hy-sv.h*LH, r=sv.r*LH;
+  g.save(); g.setTransform(1,0,0,1,0,0); const sc=g.canvas.width/LW; g.scale(sc,sc);
+  g.beginPath(); g.rect(0,0,LW,Math.max(0,hy)); g.clip();
+  const gl=g.createRadialGradient(x,y,r*0.6,x,y,r*6); gl.addColorStop(0,rgb(sv.col,0.35*sv.a)); gl.addColorStop(1,rgb(sv.col,0));
+  g.fillStyle=gl; g.fillRect(x-r*6,y-r*6,r*12,r*12);
+  g.fillStyle=rgb(sv.core,sv.a); g.beginPath(); g.arc(x,y,r,0,TAU); g.fill(); g.restore();
+}
+function drawFlowers(g,W,f,k){
+  if(!W.flowers) return; const sk=skyAt(f), lit=clamp(0.35+0.65*(sk.hor[0]+sk.hor[1])/400,0.35,1);
+  for(const fl of W.field||[]){ g.fillStyle=rgb(fl.c,0.38*lit); g.beginPath(); g.arc(fl.x,fl.y,fl.r,0,TAU); g.fill(); }
+  for(const fl of W.flowers){
+    const u=ease.out(span(f,fl.t1-6,fl.t1+22));
+    g.strokeStyle=`rgba(96,128,54,${0.85*lit})`; g.lineWidth=3.2/k; g.beginPath(); g.moveTo(fl.x+fl.sway,fl.base); g.quadraticCurveTo(fl.x-fl.sway,(fl.base+fl.y)/2,fl.x,fl.y+fl.R*0.2); g.stroke();
+    g.fillStyle=`rgba(86,120,48,${0.8*lit})`; g.beginPath(); g.ellipse(fl.x+fl.sway*0.4+fl.R*0.18,(fl.base+fl.y)/2+fl.R*0.1,fl.R*0.26,fl.R*0.09,-0.6,0,TAU); g.fill();
+    if(u<1){ g.fillStyle=`rgba(110,150,62,${0.9*lit*(1-u)})`; g.beginPath(); g.ellipse(fl.x,fl.y,fl.R*0.16,fl.R*0.24,0,0,TAU); g.fill(); }
+    if(u>0){ g.save(); g.globalAlpha=u; g.fillStyle=`rgba(255,143,177,${0.78*lit})`; g.fill(fl.shape);
+      g.fillStyle=`rgba(255,200,215,${0.25*lit})`; g.save(); g.translate(fl.x,fl.y); g.scale(0.55,0.55); g.translate(-fl.x,-fl.y); g.fill(fl.shape); g.restore();
+      g.fillStyle=`rgba(255,214,90,${0.95*lit})`; g.beginPath(); g.arc(fl.x,fl.y,fl.R*0.17,0,TAU); g.fill(); g.restore(); }
+  }
+}
+function rosePts(xc,yc,R,phi,n=5,N=260){ const pts=[]; for(let i=1;i<=N;i++){ const th=i/N*TAU, r=R*(0.26+0.74*Math.pow(Math.abs(Math.cos(n*th/2)),0.75)); pts.push([xc+r*Math.cos(th+phi),yc+r*Math.sin(th+phi)]); } return pts; }
+function drawStars(g,W,f,cam,k){
+  if(!W.stars||!W.starA) return; const a=W.starA(f); if(a<=0) return;
+  for(const st of W.stars){ if(st.y>HORIZON-200) continue; const tw=0.6+0.4*Math.sin(f*0.13+st.ph);
+    g.fillStyle=`rgba(255,244,220,${a*st.b*tw})`; g.beginPath(); g.arc(st.x,st.y,st.r/k,0,TAU); g.fill(); }
+}
+function hiveInterior(g,W,f,cam,k){ // тёмная камера улья и тёплый свет вокруг первой ячейки
+  g.fillStyle=COL.hive; g.fillRect(HIVE.x0,HIVE.y0,HIVE.x1-HIVE.x0,HIVE.y1-HIVE.y0);
+  g.save(); g.beginPath(); g.rect(HIVE.x0,HIVE.y0,HIVE.x1-HIVE.x0,HIVE.y1-HIVE.y0); g.clip();
+  const rr=Math.max(LW,LH)*0.75/k, bg=g.createRadialGradient(0,0,0,0,0,rr);
+  bg.addColorStop(0,'rgba(88,54,16,0.30)'); bg.addColorStop(0.5,'rgba(40,24,8,0.12)'); bg.addColorStop(1,'rgba(0,0,0,0)');
+  g.fillStyle=bg; g.fillRect(-rr,-rr,rr*2,rr*2); g.restore();
+}
+function hiveWalls(g,W,f,cam,k){
+  const H=HIVE, t=H.wall, wood='#2a1b0c', line=`rgba(140,102,48,0.75)`;
+  g.fillStyle=wood;
+  g.fillRect(H.x0-t,H.y0-t,H.x1-H.x0+2*t,t);                // крыша-потолок
+  g.fillRect(H.x0-t,H.y1,H.x1-H.x0+2*t,t);                  // дно
+  g.fillRect(H.x0-t,H.y0,t,H.y1-H.y0);                       // левая стенка
+  g.fillRect(H.x1,H.y0,t,H.ent[0]-H.y0);                     // правая стенка над летком
+  g.fillRect(H.x1,H.ent[1],t,H.y1-H.ent[1]);                 // и под ним
+  g.beginPath(); g.moveTo(H.x0-t-32,H.y0-t); g.lineTo(0,H.roofY); g.lineTo(H.x1+t+32,H.y0-t); g.closePath(); g.fill();
+  g.fillRect(-H.legX-7,H.y1+t,14,H.ground-H.y1-t); g.fillRect(H.legX-7,H.y1+t,14,H.ground-H.y1-t);   // ножки
+  g.fillRect(H.x1+t,H.ent[1]+1,52,6);                        // прилётная доска
+  g.strokeStyle=line; g.lineWidth=1.4/k; g.beginPath();
+  g.rect(H.x0-t,H.y0-t,H.x1-H.x0+2*t,H.y1-H.y0+2*t);
+  g.moveTo(H.x0,H.y0); g.lineTo(H.x0,H.y1); g.lineTo(H.x1,H.y1); g.lineTo(H.x1,H.ent[1]); g.moveTo(H.x1,H.ent[0]); g.lineTo(H.x1,H.y0); g.lineTo(H.x0,H.y0);
+  g.moveTo(H.x0-t-32,H.y0-t); g.lineTo(0,H.roofY); g.lineTo(H.x1+t+32,H.y0-t);
+  g.rect(H.x1+t,H.ent[1]+1,52,6); g.stroke();
+  g.fillStyle=COL.hive; g.fillRect(H.x1-1,H.ent[0],t+2,H.ent[1]-H.ent[0]);   // проём летка
+}
+
+/* ---- мир: строится один раз на сид из билдеров сцен ---- */
+let WORLD=null, WORLD_SEED=null;
+function getWorld(seed){ if(WORLD && WORLD_SEED===seed) return WORLD; WORLD=buildWorld(seed); WORLD_SEED=seed; return WORLD; }
+function buildWorld(seed){
+  const W={ seed, path:newPath(), path2:newPath(), cam:[], titles:[], glows:[], sets:[], breaks:[], dims:[], start:{}, total:0 };
+  let acc=0; for(const p of PLATES){ W.start[p.name]=acc; acc+=p.len; } W.total=acc;
+  buildComb(W,rng(hash(seed,'comb')));
+  for(const c of W.cells) c.appear=W.start.larva+c.d*12-6; // соты проступают кольцами от первой ячейки
+  const fin=()=>span(W._f,W.start.drop+BEAT*4,W.start.drop+BEAT*6); // после приземления капли: снова полумрак, как в начале
+  W.combLight=f=>{ W._f=f; const base=f<W.start.larva?0:f<W.start.comb?0.34*ease.sio(span(f,W.start.larva,W.start.cap)):lerp(0.34,0.6,ease.sio(span(f,W.start.comb,W.start.comb+BAR)));
+    return lerp(base,0.34,ease.sio(fin())); };
+  W.spot=f=>{ W._f=f; const base=f<W.start.comb?0.62:lerp(0.62,3,ease.sio(span(f,W.start.comb,W.start.comb+BAR))); return lerp(base,0.62,ease.sio(fin())); };
+  const pen=makePen(W.path,0,0,0).start();
+  W.pen=pen;
+  for(const p of PLATES){ if(p.build) p.build(W,pen,W.start[p.name],rng(hash(seed,'build',p.name))); }
+  W.cam.sort((a,b)=>a.f-b.f);
+  finalizePath(W.path,W.breaks); finalizePath(W.path2);
+  return W;
+}
+function title(W,f0,f1,small,big,o={}){ W.titles.push(Object.assign({f0,f1,small,big},o)); }
+
+/* ---- рисование линии на слое света ---- */
+function drawLine(lg,P,f,k,o={}){
+  const h=headAt(P,f); if(!h || !h.started) return h;
+  const tau=o.tau??75, core=(o.core??2.3)/k, glow=(o.glow??9)/k, gain=o.gain??1;
+  const col=o.color??COL.gold;
+  lg.lineCap='round'; lg.lineJoin='round'; lg.strokeStyle=col;
+  const i0=o.i0??0, i1=o.i1??Infinity; if(h.i<i0) return h;
+  const partial=new Path2D(); let pc=null;
+  for(const c of P.chunks){ if(c.c0<i0||c.c0>=i1) continue; if(c.c0>h.i) break; if(c.c1>h.i){ pc=c; break; } }
+  if(pc){ partial.moveTo(P.X[pc.c0],P.Y[pc.c0]); for(let i=pc.c0+1;i<=h.i;i++) partial.lineTo(P.X[i],P.Y[i]); partial.lineTo(h.x,h.y); }
+  for(let pass=0;pass<2;pass++){
+    for(const c of P.chunks){
+      if(c.c0<i0||c.c0>=i1) continue;
+      if(c.c0>h.i) break;
+      const full=c.c1<=h.i;
+      let dm=1; if(o.dims) for(const d of o.dims){ if(c.c0>=d.i0&&c.c0<d.i1) dm*=lerp(1,d.to,ease.sio(span(f,d.f0,d.f1))); }
+      const age=f-(full?c.tEnd:f), a=(c.keep+(1-c.keep)*Math.exp(-age/tau))*gain*dm;
+      if(a<0.01) continue;
+      lg.globalAlpha=pass===0?a*0.20:a;
+      lg.lineWidth=(pass===0?glow:core)*c.w;
+      lg.stroke(full?c.p:partial);
+      if(!full) break;
+    }
+  }
+  lg.globalAlpha=1;
+  return h;
+}
+function glowDot(lg,x,y,r,col,a){ // мягкая точка света, r в мировых единицах
+  const gr=lg.createRadialGradient(x,y,0,x,y,r);
+  gr.addColorStop(0,rgb(col,a)); gr.addColorStop(0.25,rgb(col,a*0.45)); gr.addColorStop(1,rgb(col,0));
+  lg.fillStyle=gr; lg.beginPath(); lg.arc(x,y,r,0,TAU); lg.fill();
+}
+
+/* ---- пчела-значок: вид сверху, голова по +x, размер в логических пикселях ---- */
+function drawBee(g,x,y,ang,s,a,f){
+  if(a<=0.01||s<=0.5) return;
+  g.save(); g.translate(x,y); g.rotate(ang); g.globalAlpha=a;
+  const L=s, Wd=s*0.46, flap=0.5+0.5*Math.sin(f*2.7+1.3);
+  g.fillStyle='rgba(255,246,222,0.55)';
+  for(const side of [-1,1]){ g.save(); g.translate(L*0.08,side*Wd*0.12); g.rotate(side*(Math.PI*0.60-flap*0.40));
+    g.beginPath(); g.ellipse(L*0.27,0,L*0.29,L*0.12,0,0,TAU); g.fill(); g.restore(); }
+  g.fillStyle=COL.gold; g.beginPath(); g.ellipse(-L*0.12,0,L*0.30,Wd*0.5,0,0,TAU); g.fill();
+  g.save(); g.clip(); g.fillStyle='#2a1b08';
+  for(const sx of [-0.33,-0.18,-0.03]) g.fillRect(-L*0.12+L*sx-L*0.035,-Wd,L*0.07,Wd*2);
+  g.restore();
+  g.fillStyle='#3a2710'; g.beginPath(); g.ellipse(L*0.19,0,L*0.13,Wd*0.36,0,0,TAU); g.fill();
+  g.fillStyle='#2a1b08'; g.beginPath(); g.arc(L*0.35,0,Wd*0.26,0,TAU); g.fill();
+  g.strokeStyle='#2a1b08'; g.lineWidth=Math.max(1,L*0.035); g.lineCap='round'; g.beginPath();
+  g.moveTo(L*0.40,-Wd*0.08); g.quadraticCurveTo(L*0.50,-Wd*0.34,L*0.57,-Wd*0.42);
+  g.moveTo(L*0.40,Wd*0.08); g.quadraticCurveTo(L*0.50,Wd*0.34,L*0.57,Wd*0.42); g.stroke();
+  g.restore();
+}
+
+/* ---- титры: маленькая строка капителью + большая курсивом ---- */
+function drawTitles(S,W){
+  const g=S.g, f=S.f;
+  for(const t of W.titles){
+    if(f<t.f0||f>t.f1) continue;
+    const a=Math.min(ease.out(span(f,t.f0,t.f0+14)), 1-ease.in(span(f,t.f1-16,t.f1)));
+    if(a<=0) continue;
+    const dy=(1-ease.out(span(f,t.f0,t.f0+22)))*12;
+    const center=t.align==='center', x=center?CX:LW*0.07, y=(t.y??LH*TITLE_Y)+dy, maxW=LW*0.86;
+    const small=typeof t.small==='function'?t.small(f):t.small;
+    g.save(); g.globalAlpha=a; g.textAlign=center?'center':'left'; g.textBaseline='alphabetic';
+    g.shadowColor='rgba(0,0,0,0.55)'; g.shadowBlur=14;
+    let yy=y;
+    if(small){ let sz=t.smallSize||24; g.font=`600 ${sz}px ${SERIF}`; g.letterSpacing='7px';
+      const w=g.measureText(small).width; if(w>maxW){ sz*=maxW/w; g.font=`600 ${sz}px ${SERIF}`; }
+      g.fillStyle=t.smallColor||COL.gold; g.fillText(small,x,yy); g.letterSpacing='0px'; yy+=(t.bigSize||60)*1.08; }
+    const big=typeof t.big==='function'?t.big(f):t.big;
+    if(big){ const lines=Array.isArray(big)?big:[big];
+      for(const line of lines){ let sz=t.bigSize||60; g.font=`italic ${sz}px ${SERIF}`;
+        const w=g.measureText(line).width; if(w>maxW){ sz*=maxW/w; g.font=`italic ${sz}px ${SERIF}`; }
+        g.fillStyle=t.bigColor||COL.cream; g.fillText(line,x,yy); yy+=sz*1.15; } }
+    g.restore();
+  }
+}
+
+/* ---- мир целиком: фон, декорации, свет, пчела, титры ---- */
+function drawWorld(S){
+  const W=getWorld(S.seed), f=S.f, g=S.g; W.skyVisible=false;
+  const cam=camAt(W,f), k=SHORT/cam.z;
+  S.cam=cam; S.k=k;
+  // фон: тёплая темнота улья, а снаружи поле и небо
+  g.fillStyle=COL.hive; g.fillRect(0,0,LW,LH);
+  g.save(); worldTransform(g,cam,k);
+  drawLandscape(g,W,f,cam,k);
+  if(W.skyVisible) drawStars(g,W,f,cam,k);
+  g.restore(); drawSun(g,W,f,cam,k); g.save(); worldTransform(g,cam,k);
+  drawFlowers(g,W,f,k);
+  hiveInterior(g,W,f,cam,k);
+  drawComb(g,W,f,cam,k);
+  hiveWalls(g,W,f,cam,k);
+  for(const st of W.sets){ if(f<st.f0||f>st.f1) continue; st.draw(g,f,k,S); }
+  g.restore();
+
+  // слой света: линия, голова, вспышки
+  const L=cvs('light',S.cv.width,S.cv.height), lg=L.getContext('2d');
+  lg.setTransform(1,0,0,1,0,0); lg.clearRect(0,0,L.width,L.height);
+  lg.setTransform(S.sc,0,0,S.sc,0,0); lg.save(); worldTransform(lg,cam,k);
+  for(const gl of W.glows){ if(f<gl.f0||f>gl.f1) continue; gl.draw(lg,f,k,S); }
+  let h;
+  if(W.lid && f>=W.lid.f0 && f<W.lid.gone){ // всё, что нарисовано до крышечки, уходит под воск
+    drawLine(lg,W.path,f,k,{i1:W.lidIdx,dims:W.dims});
+    const occ=0.78*span(f,W.lid.f0,W.lid.f0+30)*(1-span(f,W.lid.birth,W.lid.gone));
+    const top=f<W.lid.f1?headAt(W.path,f).y:-HEX_R;
+    lg.save(); lg.globalCompositeOperation='destination-out'; lg.beginPath(); hexPath(lg,0,0,HEX_R*0.95); lg.clip();
+    lg.fillStyle=`rgba(0,0,0,${occ})`; lg.fillRect(-HEX_R,top,HEX_R*2,HEX_R-top+1); lg.restore();
+    h=drawLine(lg,W.path,f,k,{i0:W.lidIdx,dims:W.dims});
+  } else h=drawLine(lg,W.path,f,k,{dims:W.dims});
+  const h2=drawLine(lg,W.path2,f,k);
+  if(h2 && h2.started!==false && W.path2.T.length && f>=W.path2.T[0]-40){ const a2=W.head2Glow?W.head2Glow(f):1;
+    if(a2>0){ glowDot(lg,h2.x,h2.y,20/k*a2,hex2rgb(COL.gold),0.55*a2); glowDot(lg,h2.x,h2.y,5/k,hex2rgb(COL.head),0.95*a2); } }
+  const bee=W.beeFrom!=null && f>=W.beeFrom && f<(W.beeTo??1e9);
+  if(h){ const br=(W.headGlow?W.headGlow(f):1)*(bee?0.55:1);
+    if(br>0){ glowDot(lg,h.x,h.y,20/k*br,hex2rgb(COL.gold),0.55*br); glowDot(lg,h.x,h.y,5/k,hex2rgb(COL.head),0.95*br); } }
+  lg.restore();
+  g.save(); g.setTransform(1,0,0,1,0,0); g.globalCompositeOperation='lighter';
+  g.filter=`blur(${Math.max(2,S.cv.width/170)}px)`; g.globalAlpha=0.85; g.drawImage(L,0,0);
+  g.filter='none'; g.globalAlpha=1; g.drawImage(L,0,0); g.restore();
+
+  for(const eb of W.extraBees||[]){ if(f<eb.f0||f>eb.f1) continue; const p=toScreen(cam,k,eb.x,eb.y);
+    const a=eb.a*Math.min(span(f,eb.f0,eb.f0+15),1-span(f,eb.f1-15,eb.f1));
+    drawBee(g,p[0],p[1],eb.ang+0.12*Math.sin(f*0.21+eb.ph),clamp(20*k,18,64)*0.85,a,f+eb.ph*7); }
+  if(bee && h){ const p=toScreen(cam,k,h.x,h.y), sz=W.beeSize?W.beeSize(f,k):clamp(20*k,18,64);
+    drawBee(g,p[0],p[1],beeAngle(W.path,f),sz,W.beeAlpha?W.beeAlpha(f):1,f); }
+  drawTitles(S,W);
+  // затемнение в начале и в конце
+  const fade=Math.max(1-span(f,0,24), span(f,W.total-BEAT,W.total-2));
+  if(fade>0){ g.fillStyle=`rgba(0,0,0,${fade})`; g.fillRect(0,0,LW,LH); }
+  S.post.grain=4; S.post.vig=0.38;
+}
+
+/* ---- пост: зерно и виньетка, по пикселям, детерминированно ---- */
+function post(src,dst,S,o={}){
+  const Wd=src.width,H=src.height, sg=src.getContext('2d'), dg=dst.getContext('2d');
+  const grain=(o.grain??0), vig=o.vig??0;
+  if(!grain && !vig){ dg.drawImage(src,0,0); return; }
+  const id=sg.getImageData(0,0,Wd,H), d=id.data, cx=(Wd-1)/2, cy=(H-1)/2;
+  let z=hash(S.seed,'grain',S.f)|0;
+  for(let y=0;y<H;y++){ const ny=(y-cy)/cy;
+    for(let x=0;x<Wd;x++){ const i=(y*Wd+x)*4; const nx=(x-cx)/cx, r2=nx*nx+ny*ny;
+      z=(Math.imul(z,1664525)+1013904223)|0; const gn=((z>>>24)/255-0.5)*grain; const v=1-vig*Math.pow(r2*0.5,1.4);
+      d[i]=d[i]*v+gn; d[i+1]=d[i+1]*v+gn; d[i+2]=d[i+2]*v+gn; } }
+  dg.putImageData(id,0,0);
+}
+
+/* =====================================================================
+   ДВИЖОК
+   ===================================================================== */
+const PLATES=[];
+/* plate(name,{len,build},fn): len кратна доле; build(W,pen,t0,R) строит линию и события сцены,
+   fn рисует кадр. В этом фильме все сцены рисует один мир, поэтому fn общая. */
+function plate(name,opts,fn){ PLATES.push(Object.assign({name,fn},opts)); }
+function TOTAL(){ return PLATES.reduce((a,p)=>a+p.len,0); }
+function locate(n){ let acc=0; for(let i=0;i<PLATES.length;i++){ if(n<acc+PLATES[i].len) return {idx:i,local:n-acc}; acc+=PLATES[i].len; } const i=PLATES.length-1; return {idx:i,local:PLATES[i].len-1}; }
+
+function renderFrame(n,width,seed,target){
+  n=((n%TOTAL())+TOTAL())%TOTAL();
+  const W=Math.round(width); let H=Math.round(W/AR); if(H%2) H++;
+  const cv=cvs('content',W,H), g=cv.getContext('2d'), sc=W/LW;
+  const {idx,local}=locate(n), P=PLATES[idx];
+  const S={ f:n, i:local, t:local/P.len, len:P.len, g, cv, sc, seed, W:LW, H:LH, name:P.name, post:{},
+            b:rng(hash(seed,'b',P.name,Math.floor(n/3))), nz:rng(hash(seed,'nz',n)) };
+  const R=rng(hash(seed,'plate',P.name));
+  g.setTransform(sc,0,0,sc,0,0); g.imageSmoothingEnabled=true; g.filter='none'; g.globalAlpha=1; g.globalCompositeOperation='source-over';
+  P.fn(S,R);
+  g.setTransform(1,0,0,1,0,0);
+  if(target.width!==W||target.height!==H){ target.width=W; target.height=H; }
+  post(cv,target,S,S.post);
+  return S;
+}
+
+function contactSheet(n,cellW,seed,target,f0=0,f1=TOTAL()-1){
+  const cols=AR>=1?6:8, rows=Math.ceil(n/cols), cellH=Math.round(cellW/AR), lab=26, gap=8;
+  const SW=cols*(cellW+gap)+gap, SH=rows*(cellH+lab+gap)+gap;
+  target.width=SW; target.height=SH; const g=target.getContext('2d');
+  g.fillStyle='#181818'; g.fillRect(0,0,SW,SH);
+  const tmp=cvs('cell',cellW*2,Math.round(cellW*2/AR));
+  for(let i=0;i<n;i++){
+    const f=Math.round(f0+i*(f1-f0)/(n-1));
+    const S=renderFrame(f,cellW*2,seed,tmp);
+    const x=gap+(i%cols)*(cellW+gap), y=gap+Math.floor(i/cols)*(cellH+lab+gap);
+    g.drawImage(tmp,x,y,cellW,cellH);
+    g.fillStyle='#ddd'; g.font='12px Menlo, monospace'; g.textBaseline='top';
+    g.fillText(`f=${f}  ${S.name}  t=${S.t.toFixed(2)}  ${(f/FPS).toFixed(1)}s`,x+2,y+cellH+6);
+  }
+}
+
+/* =====================================================================
+   СЦЕНЫ. 90 BPM: доля 20 кадров, такт 80. Склеек нет (cutIn/cutOut не нужны):
+   каждая сцена продолжает линию и камеру предыдущей.
+   ===================================================================== */
+
+/* 1. Яйцо. Точка дышит, линия выходит из неё и чертит ячейку. */
+plate('egg',{len:2*BAR, build(W,pen,t0,R){
+  const b=x=>t0+x*BEAT, hx=hexPts(0,0);
+  W.headGlow=f=>{ // дыхание точки до выхода линии
+    const pre=f<b(2)?0.75+0.25*Math.sin(TAU*f/BEAT-Math.PI/2):1;
+    return pre;
+  };
+  W.glows.push({f0:0,f1:b(12),draw(lg,f,k){ // яйцо остаётся в центре, пока линия чертит ячейку
+    const a=0.9*span(f,0,18)*(1-span(f,b(9),b(11)));
+    if(a>0) glowDot(lg,0,0,7/k+0.9,hex2rgb(COL.head),a);
+  }});
+  pen.hold(b(2));
+  pen.bez([1.2,-2.5],[-0.8,-6.5],hx[0],b(2.7),'sio',{keep:0.3});
+  pen.along([hx[1],hx[2],hx[3],hx[4],hx[5],hx[0]],b(6),'sio',{keep:0.8});
+  pen.hold(b(6.4));
+  pen.bez([-0.8,-6.5],[1.2,-2.5],[0,0],b(8),'sio',{keep:0.3});
+  camKey(W,0,0,0,40); camKey(W,b(8),0,0,56);
+}},drawWorld);
+
+/* 2. Личинка. Спираль растёт четырьмя толчками, на каждый толчок прилетает капля корма. */
+plate('larva',{len:2*BAR, build(W,pen,t0,R){
+  const b=x=>t0+x*BEAT, turns=4, th0=Math.PI/2, rs=0.4, re=6.9;
+  const radius=u=>rs+(re-rs)*Math.pow(u,0.85);
+  const spiral=(u0,u1)=>{ const pts=[], n=Math.ceil((u1-u0)*turns*70);
+    for(let i=1;i<=n;i++){ const u=u0+(u1-u0)*i/n, th=th0+u*turns*TAU, r=radius(u); pts.push([r*Math.cos(th),r*Math.sin(th)]); }
+    return pts; };
+  const pulses=[[0.5,2.1],[2.5,4.1],[4.5,6.1],[6.5,7.9]];
+  pulses.forEach(([p0,p1],q)=>{
+    pen.hold(b(p0)); pen.along(spiral(q/4,(q+1)/4),b(p1),'out',{keep:0.5});
+    // капля корма летит от края ячейки к личинке
+    const ang=-Math.PI/2+R.r(-1.2,1.2)+q*1.7, fa=b(p0)-12, fb=b(p0)+2, rIn=radius(q/4)+0.8;
+    W.glows.push({f0:fa,f1:fb+18,draw(lg,f,kk){
+      const u=ease.sin(span(f,fa,fb)), r=lerp(12.5,rIn,u), x=Math.cos(ang)*r, y=Math.sin(ang)*r;
+      const a=f<fb?0.9*span(f,fa,fa+5):0.9*(1-span(f,fb,fb+18));
+      glowDot(lg,x,y,(f<fb?13:13+26*span(f,fb,fb+18))/kk,[255,238,190],a);
+      if(f<fb) glowDot(lg,x,y,3.6/kk,[255,250,230],a);
+    }});
+  });
+  camKey(W,b(8),0,1,86);
+}},drawWorld);
+
+/* 3. Крышечка. Линия ткёт воск поверх личинки, под ним куколка, изнутри рождается пчела. */
+plate('cap',{len:2*BAR, build(W,pen,t0,R){
+  const b=x=>t0+x*BEAT;
+  const halfW=y=>{ const ay=Math.abs(y); return (ay<=HEX_R/2?HEX_W/2:HEX_W/2*(HEX_R-ay)/(HEX_R/2))-1.1; };
+  pen.hold(b(0.4));
+  W.lidIdx=W.path.X.length-1; W.breaks.push(W.lidIdx);
+  const pts=[], passes=9; let dir=1;
+  for(let q=0;q<passes;q++){ const y=lerp(7.4,-7.4,q/(passes-1)), w=halfW(y); pts.push([-dir*w,y],[dir*w,y]); dir=-dir; }
+  pen.along(pts,b(4),'sio',{keep:0.3});
+  W.lid={f0:b(0.4),f1:b(4),birth:b(6),gone:b(6.6)};
+  W.dims.push({i0:W.lidIdx,i1:W.path.X.length,f0:b(6),f1:b(7),to:0.3});   // сломанная крышечка
+  W.dims.push({i0:0,i1:W.lidIdx,f0:b(6),f1:b(7.5),to:0.55});             // личинка ушла, в ячейке память
+  pen.hold(b(4.5)); pen.bez([pen.x*0.4,-5],[0.5,-2.5],[0,0],b(5.6),'sio',{keep:0.15});
+  pen.hold(b(6.1));
+  // воск крышечки нарастает вслед за зигзагом и исчезает при рождении
+  W.sets.push({f0:b(0.4),f1:b(6.8),draw(g,f){
+    const top=f<W.lid.f1?headAt(W.path,f).y:-HEX_R, a=0.34*span(f,b(0.4),b(1))*(1-span(f,b(6),b(6.6)));
+    g.save(); g.beginPath(); hexPath(g,0,0,HEX_R*0.92); g.clip();
+    const gr=g.createRadialGradient(-2,-3,0,0,0,HEX_R); gr.addColorStop(0,`rgba(214,168,86,${a})`); gr.addColorStop(1,`rgba(150,104,40,${a})`);
+    g.fillStyle=gr; g.fillRect(-HEX_R,top,HEX_R*2,HEX_R-top+1); g.restore();
+    drawPupa(g,0,0.5,15,0.42*ease.sio(span(f,b(3.6),b(5.6)))*(1-span(f,b(6),b(6.3))));
+  }});
+  // трещины и вспышка рождения
+  const cracks=[]; for(let q=0;q<7;q++){ const an=q/7*TAU+R.r(-0.25,0.25), pts2=[[0,0]]; let r=0;
+    while(r<8){ r+=R.r(1.4,2.4); const a2=an+R.r(-0.35,0.35); pts2.push([Math.cos(a2)*Math.min(r,8.2),Math.sin(a2)*Math.min(r,8.2)]); } cracks.push(pts2); }
+  W.glows.push({f0:b(6)-2,f1:b(7.2),draw(lg,f,kk){
+    const u=span(f,b(6),b(6)+4), a=f<b(6)?0:(1-span(f,b(6)+3,b(7.2)));
+    lg.save(); lg.strokeStyle=`rgba(255,244,210,${a})`; lg.lineWidth=2.4/kk; lg.lineCap='round';
+    for(const c of cracks){ lg.beginPath(); lg.moveTo(0,0); const m=Math.max(1,Math.round(u*(c.length-1)));
+      for(let i=1;i<=m;i++) lg.lineTo(c[i][0],c[i][1]); lg.stroke(); }
+    lg.restore();
+    glowDot(lg,0,0,(40+60*span(f,b(6),b(7)))/kk,[255,226,150],0.7*a);
+  }});
+  // пчела выходит вверх и обходит край своей ячейки
+  W.beeFrom=b(6.1);
+  W.beeSize=(f,k)=>{ const n=clamp(20*k,18,64); if(f<b(6.1)+14) return 118*ease.back(span(f,b(6.1),b(6.1)+14)); return lerp(118,n,ease.sio(span(f,b(6.1)+14,b(7.6)+30))); };
+  const hx=hexPts(0,0);
+  pen.to(hx[0][0],hx[0][1],b(6.7),'sio',{keep:0.2});
+  pen.along([hx[1],hx[2],hx[3]],b(7.9),'sio',{keep:0.6});
+  title(W,b(6.4),b(9)+0,'ДЕНЬ 1','Рождение');
+  camKey(W,b(0),0,1,86); camKey(W,b(5.8),0,0,78); camKey(W,b(8),0,3,84);
+}},drawWorld);
+
+/* 4. Соты. Три роли по такту: кормилица, строитель, стража. */
+plate('comb',{len:3*BAR, build(W,pen,t0,R){
+  const b=x=>t0+x*BEAT;
+  // A. Кормилица: четыре личинки, петля над каждой, спираль вспыхивает
+  const nurse=[[1,1],[-1,3],[1,5],[0,7]], arrive=[b(0.95),b(1.95),b(2.95),b(3.8)];
+  nurse.forEach(([c,r],q)=>{
+    const cell=cellAt(W,c,r); if(cell){ cell.type='larva'; cell.size=0.85; }
+    const [x,y]=hexCenter(c,r), a=arrive[q], px=pen.x, py=pen.y, sd=q%2?1:-1;
+    pen.bez([lerp(px,x,0.3)+sd*7,lerp(py,y,0.3)-5],[lerp(px,x,0.75)+sd*6,lerp(py,y,0.75)-7],[x+3.4,y],a,'sio',{keep:0.2});
+    const loop=[]; for(let i=1;i<=28;i++){ const th=i/28*TAU; loop.push([x+3.4*Math.cos(th),y+3.4*Math.sin(th)]); }
+    pen.along(loop,a+9,'sio',{keep:0.26});
+    const rot=cell?cell.seedA*TAU:0;
+    W.glows.push({f0:a-5,f1:a+40,draw(lg,f,kk){
+      const al=Math.min(span(f,a-5,a+3),1-span(f,a+6,a+40)); if(al<=0) return;
+      glowDot(lg,x,y,26/kk,[255,226,150],0.5*al);
+      lg.save(); lg.translate(x,y); const s2=HEX_R*0.9*0.72*0.85; lg.scale(s2,s2); lg.rotate(rot);
+      lg.strokeStyle=`rgba(255,238,196,${0.95*al})`; lg.lineWidth=2.2/(kk*s2); lg.stroke(spiralUnit()); lg.restore();
+    }});
+  });
+  title(W,b(1.25),b(3.9),'ДЕНЬ 3','Кормилица');
+  // B. Строитель: четыре новые ячейки на нижнем краю сот, сразу наливаются мёдом
+  const notch=[[-1,12],[0,12],[1,12],[2,12]];
+  const v0=hexPts(...hexCenter(-1,12))[0];
+  pen.bez([pen.x-10,pen.y+30],[v0[0]-14,v0[1]-40],v0,b(4.7),'sio',{keep:0.2});
+  let tt=b(4.7);
+  notch.forEach(([c,r],q)=>{
+    const [x,y]=hexCenter(c,r), hx=hexPts(x,y), done=tt+15;
+    pen.along(q?[hx[0],hx[1],hx[2],hx[3],hx[4],hx[5],hx[0],hx[1]]:[hx[1],hx[2],hx[3],hx[4],hx[5],hx[0],hx[1]],done,'sio',{keep:0.55});
+    tt=done;
+    const cell={col:c,row:r,x,y,d:hexDist(0,0,c,r),type:'empty',size:0,appear:done-16,lit:[],fillT:[done+8,done+60],seedA:R.f()};
+    W.cells.push(cell); W.cellMap.set(c+','+r,cell);
+  });
+  [[-1,11],[0,11],[1,11],[2,11],[-2,11]].forEach(([c,r],q)=>{ const cell=cellAt(W,c,r); if(cell){ cell.type='empty'; cell.fillT=[b(5)+q*9,b(5)+q*9+70]; } });
+  title(W,b(4.3),b(7.9),'ДЕНЬ 12','Строитель');
+  // C. Стража: к летку, дозор у входа
+  const ex=404, ey=270;
+  pen.bez([pen.x+70,pen.y+70],[ex-150,ey+24],[ex,ey],b(9.3),'sio',{keep:0.2});
+  const oval=[]; for(let i=1;i<=64;i++){ const th=Math.PI+i/64*TAU*2; oval.push([ex+5+5*Math.cos(th),ey+13*Math.sin(th)*(i<32?1:0.8)]); }
+  pen.along(oval,b(11.5),'sio',{keep:0.3});
+  pen.to(HIVE.x1+4,270,b(12),'sin',{keep:0.3});
+  title(W,b(8.3),b(11.9),'ДЕНЬ 18','Стража');
+  // свет из летка
+  W.glows.push({f0:b(8),f1:W.start.meadow,draw(lg,f,kk){ const a=0.22*span(f,b(8),b(9.5))*(1-span(f,W.start.out+BAR,W.start.meadow));
+    const ey=(HIVE.ent[0]+HIVE.ent[1])/2, gr=lg.createRadialGradient(HIVE.x1+HIVE.wall,ey,0,HIVE.x1+HIVE.wall,ey,90);
+    gr.addColorStop(0,`rgba(255,196,130,${a})`); gr.addColorStop(1,'rgba(255,196,130,0)');
+    lg.fillStyle=gr; lg.beginPath(); lg.arc(HIVE.x1+HIVE.wall,ey,90,0,TAU); lg.fill();
+    const sl=lg.createLinearGradient(HIVE.x1-2,0,HIVE.x1+HIVE.wall+2,0); sl.addColorStop(0,`rgba(255,214,160,${a*1.2})`); sl.addColorStop(1,`rgba(255,236,200,${a*2.6})`);
+    lg.fillStyle=sl; lg.fillRect(HIVE.x1-1,HIVE.ent[0]+2,HIVE.wall+2,HIVE.ent[1]-HIVE.ent[0]-4); }});
+  camKey(W,b(1.6),10,40,190); camKey(W,b(3.6),8,95,200); camKey(W,b(5.2),8,165,190);
+  camKey(W,b(7.8),10,168,195); camKey(W,b(9.4),372,258,180); camKey(W,b(12),398,266,150);
+}},drawWorld);
+
+/* 5. Вылет. Дуги облёта перед ульем, рассвет. */
+plate('out',{len:2*BAR, build(W,pen,t0,R){
+  const b=x=>t0+x*BEAT, ex=HIVE.x1+HIVE.wall, ey=270;
+  const a0s=0.42, st=[ex+62*Math.cos(a0s),ey+62*Math.sin(a0s)];
+  pen.bez([ex+22,ey-3],[st[0]-12,st[1]-16],st,b(0.45),'sin',{keep:0.3});
+  const radii=[62,98,138,184,232]; let t=b(0.45), up=true;
+  radii.forEach((r,q)=>{ const a0=up?0.42:-0.95, a1=up?-0.95:0.42, pts=[];
+    for(let i=0;i<=36;i++){ const a=lerp(a0,a1,i/36); pts.push([ex+r*Math.cos(a),ey+r*Math.sin(a)]); }
+    const dur=q<2?17:19; pen.along(pts,t+dur,'sio',{keep:0.32}); t+=dur; up=!up; });
+  pen.bez([pen.x+120,pen.y-90],[640,40],[770,70],b(8),'sio',{keep:0.3});
+  title(W,b(0.9),b(5.4),'ДЕНЬ 21','Сборщица');
+  // солнце: встаёт справа на рассвете, днём идёт дугой, на закате садится
+  W.sun=f=>{ const a=span(f,W.start.out+BAR*0.6,W.start.out+BAR*1.6)*(1-span(f,W.start.drop+BEAT,W.start.drop+BAR));
+    const d=span(f,W.start.out+BAR,W.start.last+BAR*2); // 0 восход, 1 закат
+    const h=Math.sin(Math.PI*Math.min(1,d*1.05))*0.22+0.012;
+    const sunset=span(d,0.72,1), dawn=1-span(d,0,0.2);
+    const core=mix3([255,236,190],[255,170,90],Math.max(sunset,dawn*0.8)), col=mix3([255,214,140],[255,120,60],Math.max(sunset,dawn*0.7));
+    return {a,x:lerp(0.86,0.72,d),h:d<0.02?0.012+d:h,r:lerp(0.032,0.055,Math.max(sunset,dawn)),core,col}; };
+  camKey(W,b(0.5),418,262,175); camKey(W,b(2.2),520,190,520); camKey(W,b(5),360,110,1060); camKey(W,b(8),640,70,1000,{w:0.35,lag:8});
+}},drawWorld);
+
+/* 6. Луг. Каждая петля распускается цветком, счётчик дней бежит к 39. */
+plate('meadow',{len:3*BAR, build(W,pen,t0,R){
+  const b=x=>t0+x*BEAT;
+  const specs=[[1000,170,70,330],[1600,60,55,190],[2250,170,80,370],[1800,360,90,570],[1150,380,85,590]];
+  const legs=[[18,24],[18,22],[20,24],[18,24],[16,24]], days=[22,25,29,33,37];
+  W.flowers=[]; let t=t0;
+  specs.forEach(([x,y,Rr,base],q)=>{
+    const phi=Math.atan2(pen.y-y,pen.x-x), tip=[x+Rr*Math.cos(phi),y+Rr*Math.sin(phi)];
+    const mx=(pen.x+tip[0])/2, my=(pen.y+tip[1])/2-40-R.r(0,30);
+    t+=legs[q][0]; pen.bez([lerp(pen.x,mx,0.6),lerp(pen.y,my,0.8)],[lerp(tip[0],mx,0.5),lerp(tip[1],my,0.7)],tip,t,'sio',{keep:0.3});
+    const pts=rosePts(x,y,Rr,phi), t1=t+legs[q][1];
+    pen.along(pts,t1,'sio',{keep:0.45});
+    const shape=new Path2D(); shape.moveTo(tip[0],tip[1]); for(const pt of pts) shape.lineTo(pt[0],pt[1]); shape.closePath();
+    W.flowers.push({x,y,R:Rr,base,sway:R.r(-10,10),t0:t,t1,shape,day:days[q]}); t=t1;
+    W.glows.push({f0:t1-4,f1:t1+30,draw(lg,f,kk){ const al=Math.min(span(f,t1-4,t1+2),1-span(f,t1+4,t1+30)); glowDot(lg,x,y,(30+30*span(f,t1,t1+30))/kk,[255,226,140],0.6*al); }});
+  });
+  const ex=HIVE.x1+HIVE.wall+2, ey=270;
+  pen.bez([pen.x-160,pen.y-70],[ex+170,ey-80],[ex,ey],b(12),'sio',{keep:0.3});
+  // полевые цветы вдали для фактуры
+  W.field=[]; for(let i=0;i<90;i++){ const y=R.r(-40,640), x=R.r(480,2900), dpt=clamp((y+60)/700);
+    W.field.push({x,y,r:lerp(2.2,6,dpt),c:R.pick([[255,160,190],[255,236,220],[255,214,110],[200,170,255]])}); }
+  title(W,b(0.2),b(11.6),'ДЕНЬ',f=>{ let d=21; for(const fl of W.flowers) if(f>=fl.t0-4) d=fl.day; if(f>=b(10.2)) d=39; return String(d); },{bigSize:84});
+  camKey(W,b(2),1150,140,700,{w:0.85,lag:7,oy:-40}); camKey(W,b(6),1800,170,720,{w:0.85,lag:7,oy:-40}); camKey(W,b(10),1300,280,740,{w:0.85,lag:7,oy:-60}); camKey(W,b(12),640,250,800,{w:0.7,lag:7,oy:-40});
+}},drawWorld);
+
+/* 7. Танец. Восьмёрка с виляющим пробегом в сторону солнца, вокруг сёстры. */
+plate('dance',{len:2*BAR, build(W,pen,t0,R){
+  const b=x=>t0+x*BEAT, D0=[300,122], ang=40*Math.PI/180, dir=[Math.sin(ang),-Math.cos(ang)], nrm=[dir[1],-dir[0]], L=34;
+  pen.bez([392,262],[330,196],D0,b(1.5),'sio',{keep:0.3});
+  let t=b(1.5);
+  for(let q=0;q<4;q++){
+    const run=[]; for(let i=1;i<=56;i++){ const u=i/56, w=Math.sin(u*7*TAU)*2.4*Math.sin(Math.PI*u);
+      run.push([D0[0]+dir[0]*L*u+nrm[0]*w,D0[1]+dir[1]*L*u+nrm[1]*w]); }
+    pen.along(run,t+14,'lin',{keep:0.4}); t+=14;
+    const M=[D0[0]+dir[0]*L/2,D0[1]+dir[1]*L/2], a1=Math.atan2(dir[1],dir[0]), sd=q%2?1:-1, ret=[];
+    for(let i=1;i<=40;i++){ const a=a1+sd*Math.PI*i/40; ret.push([M[0]+Math.cos(a)*L/2*1.08,M[1]+Math.sin(a)*L/2*1.08]); }
+    pen.along(ret,t+14,'sio',{keep:0.36}); t+=14;
+    const tr=t-28;
+    W.glows.push({f0:tr,f1:tr+26,draw(lg,f,kk){ const al=Math.min(span(f,tr,tr+4),1-span(f,tr+10,tr+26)); glowDot(lg,D0[0]+dir[0]*L*0.6,D0[1]+dir[1]*L*0.6,40/kk,[255,220,140],0.35*al); }});
+  }
+  pen.bez([D0[0]+30,D0[1]+30],[360,230],[396,258],b(8),'sio',{keep:0.25});
+  W.extraBees=[]; for(let q=0;q<6;q++){ const a=q/6*TAU+0.3, r=R.r(30,38), x=D0[0]+dir[0]*L*0.5+Math.cos(a)*r, y=D0[1]+dir[1]*L*0.5+Math.sin(a)*r;
+    W.extraBees.push({x,y,ang:Math.atan2(D0[1]+dir[1]*L*0.5-y,D0[0]+dir[0]*L*0.5-x),f0:b(0.5),f1:b(8),a:0.5,ph:R.r(0,10)}); }
+  camKey(W,b(0.6),420,250,420); camKey(W,b(1.6),312,112,150); camKey(W,b(7.2),312,112,150); camKey(W,b(8),360,190,260);
+}},drawWorld);
+
+/* 8. Последний полёт. Закат, линия поднимается над ульем, истончается, дрожит и замирает. */
+plate('last',{len:2*BAR, build(W,pen,t0,R){
+  const b=x=>t0+x*BEAT, ex=HIVE.x1+HIVE.wall+2;
+  pen.bez([410,262],[424,270],[ex,270],b(0.6),'sio',{keep:0.3});
+  pen.to(ex+40,262,b(1),'sio',{keep:0.4});
+  const key=[[ex+40,262],[600,150],[664,-120],[570,-420],[340,-720],[128,-960],[0,-1100]], pts=[];
+  for(let i=0;i<key.length-1;i++){ const p0=key[Math.max(0,i-1)],p1=key[i],p2=key[i+1],p3=key[Math.min(key.length-1,i+2)];
+    for(let j=1;j<=40;j++){ const t=j/40,t2=t*t,t3=t2*t;
+      pts.push([0.5*((2*p1[0])+(-p0[0]+p2[0])*t+(2*p0[0]-5*p1[0]+4*p2[0]-p3[0])*t2+(-p0[0]+3*p1[0]-3*p2[0]+p3[0])*t3),
+                0.5*((2*p1[1])+(-p0[1]+p2[1])*t+(2*p0[1]-5*p1[1]+4*p2[1]-p3[1])*t2+(-p0[1]+3*p1[1]-3*p2[1]+p3[1])*t3)]); } }
+  pen.along(pts,b(8),'sout',{keep:0.5,step:1.2,
+    width:u=>lerp(1,0.32,ease.sio(span(u,0.45,1))),
+    warp:u=>{ const a=26*Math.pow(span(u,0.55,0.985),1.5)*(1-span(u,0.985,1)); return [a*Math.sin(u*150),a*0.5*Math.cos(u*113)]; }});
+  W.pEnd=[pen.x,pen.y];
+  W.beeTo=b(8);
+  W.beeAlpha=f=>1-ease.sin(span(f,b(6.6),b(8)));
+  title(W,b(1.2),b(6.4),'ДЕНЬ','40',{bigSize:84});
+  camKey(W,b(0.6),420,250,300); camKey(W,b(2),560,120,700,{w:0.6,lag:8}); camKey(W,b(4.5),420,-300,1300,{w:0.55,lag:10});
+  camKey(W,b(8),40,-400,1700);
+}},drawWorld);
+
+/* 9. Капля. Точка становится каплей, падает в свою ячейку; в соседней начинается новая линия. */
+plate('drop',{len:3*BAR, build(W,pen,t0,R){
+  const b=x=>t0+x*BEAT, P=W.pEnd, fall0=b(1.1), fall1=b(4.1);
+  pen.hold(t0+3*BAR);
+  const yAt=f=>lerp(P[1],0,ease.in(span(f,fall0,fall1))*0.985+span(f,fall1-6,fall1)*0.015), xAt=f=>lerp(P[0],0,ease.sio(span(f,fall0,fall1)));
+  W.headGlow=(()=>{ const prev=W.headGlow; return f=>{ if(f<t0) return prev?prev(f):1; if(f<fall0) return 1+0.5*Math.sin(Math.PI*span(f,t0,fall0)); return 0; }; })();
+  W.glows.push({f0:fall0,f1:t0+3*BAR,draw(lg,f,kk){
+    const x=f<fall1?xAt(f):0, y=f<fall1?yAt(f):0.6, land=span(f,fall1,fall1+14);
+    const sz=clamp(4.4*kk,11,58)/kk*(1-0.35*land);
+    glowDot(lg,x,y,sz*4.5,[255,190,80],0.45*(1-0.6*land));
+    lg.save(); lg.translate(x,y); const gr=lg.createRadialGradient(-sz*0.3,-sz*0.3,0,0,0,sz*1.2);
+    gr.addColorStop(0,'rgba(255,236,170,1)'); gr.addColorStop(0.5,'rgba(255,184,60,0.95)'); gr.addColorStop(1,'rgba(214,120,20,0.9)');
+    lg.fillStyle=gr; lg.globalAlpha=1-land; lg.beginPath(); lg.moveTo(0,-2.3*sz);
+    lg.bezierCurveTo(0.55*sz,-1.3*sz,sz,-0.5*sz,sz,0.05*sz); lg.arc(0,0.05*sz,sz,0,Math.PI); lg.bezierCurveTo(-sz,-0.5*sz,-0.55*sz,-1.3*sz,0,-2.3*sz); lg.fill(); lg.restore();
+    if(f>=fall1){ for(let q=0;q<2;q++){ const u=span(f,fall1+q*8,fall1+q*8+40); if(u<=0||u>=1) continue;
+      lg.strokeStyle=`rgba(255,220,150,${0.7*(1-u)})`; lg.lineWidth=2/kk; lg.beginPath(); hexPath(lg,0,0,HEX_R*(0.3+0.75*u)); lg.stroke(); } }
+  }});
+  // мёд в её ячейке
+  W.sets.push({f0:fall1,f1:t0+3*BAR,draw(g,f){ const u=ease.sio(span(f,fall1,fall1+30));
+    g.save(); g.beginPath(); hexPath(g,0,0,HEX_R*0.9); g.clip();
+    const gr=g.createRadialGradient(-2.5,-3,0.5,0,0,HEX_R); gr.addColorStop(0,`rgba(255,206,110,${0.85*u})`); gr.addColorStop(1,`rgba(196,122,24,${0.8*u})`);
+    g.fillStyle=gr; g.fillRect(-HEX_R,-HEX_R,HEX_R*2,HEX_R*2);
+    g.fillStyle=`rgba(255,246,210,${0.5*u})`; g.beginPath(); g.ellipse(-3,-4,2.4,1.2,-0.5,0,TAU); g.fill(); g.restore(); }});
+  // камера следует за каплей и ныряет в соты
+  for(let f=fall0;f<=fall1;f+=4){ camKey(W,f,xAt(f),yAt(f)+lerp(-60,0,span(f,fall0,fall1)),Math.exp(lerp(Math.log(1700),Math.log(58),ease.sio(span(f,fall0,fall1)))),{e:'lin'}); }
+  camKey(W,b(1),20,-420,1700); camKey(W,fall1+10,0,0,56); camKey(W,b(7.5),5,0,62); camKey(W,b(11),9,0,70);
+  // новая жизнь в соседней ячейке
+  const nc=cellAt(W,1,0); if(nc){ nc.type='empty'; nc.fillT=null; }
+  const [nx,ny]=hexCenter(1,0), hx=hexPts(nx,ny), pen2=makePen(W.path2,nx,ny,b(7)).start();
+  pen2.hold(b(8)); pen2.bez([nx+1.2,ny-2.5],[nx-0.8,ny-6.5],hx[0],b(8.6),'sio',{keep:0.3});
+  pen2.along([hx[1],hx[2],hx[3],hx[4],hx[5],hx[0]],b(11),'sio',{keep:0.85});
+  W.head2Glow=f=>span(f,b(7),b(7.8))*(f<b(8)?0.75+0.25*Math.sin(TAU*f/BEAT-Math.PI/2):1);
+  W.glows.push({f0:b(7),f1:t0+3*BAR,draw(lg,f,kk){ glowDot(lg,nx,ny,7/kk+0.9,hex2rgb(COL.head),0.9*span(f,b(7),b(7.8))); }});
+  title(W,fall1+14,b(10.6),'ЗА 40 ДНЕЙ ЖИЗНИ','1/12 чайной ложки мёда',{align:'center',y:LH*TITLE_Y});
+  // звёзды проступают в сумерках
+  const SR=rng(hash(W.seed,'stars')); W.stars=[]; for(let i=0;i<160;i++) W.stars.push({x:SR.r(-2600,2600),y:SR.r(-3200,-260),r:SR.r(0.8,2.1),b:SR.r(0.35,1),ph:SR.r(0,TAU)});
+  W.starA=f=>span(f,W.start.last+BAR,t0+BEAT)*0.9;
+}},drawWorld);
+
+/* заглушек больше нет */
+for(const [name,bars] of []){
+  plate(name,{len:bars*BAR, build(W,pen,t0){ pen.hold(t0+bars*BAR); }},drawWorld);
+}
+
+/* =====================================================================
+   ЗАПУСК
+   ===================================================================== */
+const MAIN=document.getElementById('c');
+window.RISO={
+  fps:FPS,
+  get total(){ return TOTAL(); },
+  get plates(){ return PLATES.map(p=>({name:p.name,len:p.len})); },
+  frame(n,width,seed){ renderFrame(n,width??WIDTH,seed??SEED,MAIN); return MAIN.toDataURL('image/png'); },
+  // покадровые кривые для звука: скорость головы на экране, панорама, видна ли пчела
+  curves(){ const W=getWorld(SEED), out=[];
+    for(let f=0;f<TOTAL();f++){ const cam=camAt(W,f), k=SHORT/cam.z;
+      const a=headAt(W.path,f), b=headAt(W.path,f-1), a2=headAt(W.path2,f), b2=headAt(W.path2,f-1);
+      const sp=(a&&b&&a.started)?Math.hypot(a.x-b.x,a.y-b.y)*k:0, sp2=(a2&&b2&&a2.started&&W.path2.T.length&&f>=W.path2.T[0])?Math.hypot(a2.x-b2.x,a2.y-b2.y)*k:0;
+      out.push({f,sp:+sp.toFixed(2),sp2:+sp2.toFixed(2),pan:a?+clamp((a.x-cam.x)*k/(LW/2),-1,1).toFixed(3):0,
+        bee:(W.beeFrom!=null&&f>=W.beeFrom&&f<(W.beeTo??1e9))?1:0,z:+cam.z.toFixed(1)}); }
+    return {fps:FPS,bpm:BPM,total:TOTAL(),start:W.start,frames:out}; },
+  contact(n,cellW,f0,f1){ contactSheet(n||24,cellW||480,SEED,MAIN,f0??0,f1??TOTAL()-1); return MAIN.toDataURL('image/png'); }
+};
+window.addEventListener('load',()=>{
+  if(Q.has('grid')){ contactSheet(+Q.get('grid')||24,+Q.get('cw')||480,SEED,MAIN); window.__ready=true; }
+  else if(Q.has('f')){ renderFrame(+Q.get('f')||0,WIDTH,SEED,MAIN); window.__ready=true; }
+  else { let f=+(Q.get('from')||0), last=0;
+    const tick=(ts)=>{ if(ts-last>=1000/FPS){ last=ts; renderFrame(f++,Math.min(WIDTH,960),SEED,MAIN); } requestAnimationFrame(tick); };
+    requestAnimationFrame(tick); window.__ready=true; }
+});
+</script>
+</body>
+</html>

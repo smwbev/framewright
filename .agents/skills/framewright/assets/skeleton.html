@@ -61,20 +61,23 @@ const clamp=(v,a=0,b=1)=>v<a?a:v>b?b:v;
 const lerp=(a,b,t)=>a+(b-a)*t;
 const span=(f,a,b)=>clamp((f-a)/(b-a));                    // progress of f between a and b, 0..1
 const smooth=t=>{t=clamp(t);return t*t*(3-2*t)};
-const ease={
+const ease=Object.freeze({                                 // frozen, like COL: a plate that edits shared values breaks render order
   out:t=>1-Math.pow(1-clamp(t),3), in:t=>Math.pow(clamp(t),3),
   io:t=>{t=clamp(t);return t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2},
   back:t=>{const c=1.70158;t=clamp(t);return 1+(c+1)*Math.pow(t-1,3)+c*Math.pow(t-1,2)},
   elastic:t=>{t=clamp(t);return t===0||t===1?t:Math.pow(2,-10*t)*Math.sin((t*10-0.75)*(2*Math.PI/3))+1}
-};
+});
 const pad=(n,w=2)=>String(n).padStart(w,'0');
 
 /* ---------- canvas pool ---------- */
 const POOL={};
-function cvs(name,w,h){ let c=POOL[name]; if(!c){ c=document.createElement('canvas'); POOL[name]=c; } if(c.width!==w||c.height!==h){ c.width=w; c.height=h; } return c; }
+function cvs(name,w,h){ let c=POOL[name]; if(!c){ c=document.createElement('canvas'); c.getContext('2d',{willReadFrequently:true}); POOL[name]=c; } if(c.width!==w||c.height!==h){ c.width=w; c.height=h; } return c; }
+/* a pooled canvas keeps its context from frame to frame: wipe it before drawing, or a save() without restore(), a clip,
+   a shadow or a composite mode left by one frame leaks into the next and frames start to depend on render order */
+function wipe(g){ if(g.reset) g.reset(); else g.canvas.width=g.canvas.width; return g; }
 
 /* ---------- palette (replace with the palette of your style) ---------- */
-const COL={ bg:'#0b0d12', ink:'#f2f4f8', accent:'#ffb020', dim:'#5b6270' };
+const COL=Object.freeze({ bg:'#0b0d12', ink:'#f2f4f8', accent:'#ffb020', dim:'#5b6270' });
 const FONT_MONO='Menlo, Monaco, "Courier New", monospace';
 const FONT_SANS='"Helvetica Neue", Helvetica, Arial, sans-serif';
 
@@ -167,7 +170,7 @@ function cut(g,S,amt){ g.fillStyle=`rgba(0,0,0,${amt})`; g.fillRect(0,0,LW,LH); 
 function renderFrame(n,width,seed,target){
   n=((n%TOTAL())+TOTAL())%TOTAL();
   const W=Math.round(width); let H=Math.round(W/AR); if(H%2) H++;   // even height for libx264
-  const cv=cvs('content',W,H), g=cv.getContext('2d'), sc=W/LW;
+  const cv=cvs('content',W,H), g=wipe(cv.getContext('2d')), sc=W/LW;   // a clean context every frame
   const {idx,local}=locate(n), P=PLATES[idx];
   const S={ f:n, i:local, t:local/P.len, len:P.len, g, cv, sc, seed, W:LW, H:LH, name:P.name, post:{},
             b:rng(hash(seed,'b',P.name,Math.floor(n/3))), nz:rng(hash(seed,'nz',n)) };
@@ -220,7 +223,7 @@ plate('title',{len:2*BAR, cutIn:false},(S,R)=>{
 /* =====================================================================
    BOOT
    ===================================================================== */
-const MAIN=document.getElementById('c');
+const MAIN=document.getElementById('c'); MAIN.getContext('2d',{willReadFrequently:true});   // read back every frame: keep it on the CPU
 window.RISO={
   fps:FPS,
   get total(){ return TOTAL(); },

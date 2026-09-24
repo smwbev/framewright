@@ -13,7 +13,7 @@ if (!fs.existsSync(html)) { console.error(`no such file: ${html} (set HTML=path)
 fs.mkdirSync(dir, { recursive: true });
 const url = 'file://' + html + `?f=0&w=320&s=${seed}` + (process.env.AR ? `&ar=${process.env.AR}` : '');
 
-const b = await puppeteer.launch({ headless: true, protocolTimeout: 600000, args: ['--allow-file-access-from-files'] });
+const b = await puppeteer.launch({ headless: true, protocolTimeout: 600000, args: ['--allow-file-access-from-files', '--disable-accelerated-2d-canvas'] });
 const p0 = await b.newPage();
 await p0.goto(url, { waitUntil: 'load', timeout: 120000 });
 await p0.waitForFunction('window.__ready===true', { timeout: 120000 });

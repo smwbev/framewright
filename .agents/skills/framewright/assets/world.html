@@ -66,14 +66,14 @@ const clamp=(v,a=0,b=1)=>v<a?a:v>b?b:v;
 const lerp=(a,b,t)=>a+(b-a)*t;
 const span=(f,a,b)=>clamp((f-a)/(b-a));                    // progress of f between a and b, 0..1
 const smooth=t=>{t=clamp(t);return t*t*(3-2*t)};
-const ease={
+const ease=Object.freeze({                                 // frozen, like COL: a plate that edits shared values breaks render order
   out:t=>1-Math.pow(1-clamp(t),3), in:t=>Math.pow(clamp(t),3),
   io:t=>{t=clamp(t);return t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2},
   sio:t=>0.5-0.5*Math.cos(Math.PI*clamp(t)),               // sine in-out: the default of the pen and the camera
   sin:t=>1-Math.cos(Math.PI/2*clamp(t)), sout:t=>Math.sin(Math.PI/2*clamp(t)),
   back:t=>{const c=1.70158;t=clamp(t);return 1+(c+1)*Math.pow(t-1,3)+c*Math.pow(t-1,2)},
   lin:t=>clamp(t)
-};
+});
 function invEase(e,u){ // the time fraction at which ease e reaches u: the pen's clock (monotonic eases only)
   const fn=ease[e]||ease.lin; if(fn===ease.lin) return clamp(u);
   let lo=0,hi=1; for(let k=0;k<24;k++){ const m=(lo+hi)/2; if(fn(m)<u) lo=m; else hi=m; }
@@ -86,10 +86,13 @@ const mix3=(a,b,t)=>[lerp(a[0],b[0],t),lerp(a[1],b[1],t),lerp(a[2],b[2],t)];
 
 /* ---------- canvas pool ---------- */
 const POOL={};
-function cvs(name,w,h){ let c=POOL[name]; if(!c){ c=document.createElement('canvas'); POOL[name]=c; } if(c.width!==w||c.height!==h){ c.width=w; c.height=h; } return c; }
+function cvs(name,w,h){ let c=POOL[name]; if(!c){ c=document.createElement('canvas'); c.getContext('2d',{willReadFrequently:true}); POOL[name]=c; } if(c.width!==w||c.height!==h){ c.width=w; c.height=h; } return c; }
+/* a pooled canvas keeps its context from frame to frame: wipe it before drawing, or a save() without restore(), a clip,
+   a shadow or a composite mode left by one frame leaks into the next and frames start to depend on render order */
+function wipe(g){ if(g.reset) g.reset(); else g.canvas.width=g.canvas.width; return g; }
 
 /* ---------- palette (replace with the palette of your film) ---------- */
-const COL={ bg:'#06080d', line:'#8fdcff', head:'#effbff', text:'#e9eef5', dust:'#9fb3c8', lid:'#1a2533' };
+const COL=Object.freeze({ bg:'#06080d', line:'#8fdcff', head:'#effbff', text:'#e9eef5', dust:'#9fb3c8', lid:'#1a2533' });
 const LINE=hex2rgb(COL.line), HEAD=hex2rgb(COL.head), DUST=hex2rgb(COL.dust), LID=hex2rgb(COL.lid);
 const FONT_SANS='"Helvetica Neue", Helvetica, Arial, sans-serif';
 const FONT_SERIF='"Iowan Old Style", Palatino, "PT Serif", Georgia, serif';
@@ -261,8 +264,7 @@ function drawWorld(S){
   for(const st of W.sets) if(f>=st.f0 && f<=st.f1) st.draw(g,f,k,cam,S);
   g.restore();
   // light layer: drawn in world coordinates on its own canvas, added with 'lighter' twice: blurred (bloom), then sharp
-  const L=cvs('light',S.cv.width,S.cv.height), lg=L.getContext('2d');
-  lg.setTransform(1,0,0,1,0,0); lg.clearRect(0,0,L.width,L.height);
+  const L=cvs('light',S.cv.width,S.cv.height), lg=wipe(L.getContext('2d'));
   lg.setTransform(S.sc,0,0,S.sc,0,0); lg.save(); worldTransform(lg,cam,k);
   for(const gl of W.glows) if(f>=gl.f0 && f<=gl.f1) gl.draw(lg,f,k,cam,S);
   const h=drawLineCovered(lg,W,f,k), br=W.headGlow?W.headGlow(f):1;
@@ -326,12 +328,12 @@ function buildWorld(seed){
 function renderFrame(n,width,seed,target){
   n=((n%TOTAL())+TOTAL())%TOTAL();
   const W=Math.round(width); let H=Math.round(W/AR); if(H%2) H++;   // even height for libx264
-  const cv=cvs('content',W,H), g=cv.getContext('2d'), sc=W/LW;
+  const cv=cvs('content',W,H), g=wipe(cv.getContext('2d')), sc=W/LW;   // a clean context every frame
   const {idx,local}=locate(n), P=PLATES[idx];
   const S={ f:n, i:local, t:local/P.len, len:P.len, g, cv, sc, seed, W:LW, H:LH, name:P.name, post:{},
             b:rng(hash(seed,'b',P.name,Math.floor(n/3))), nz:rng(hash(seed,'nz',n)) };
   const R=rng(hash(seed,'plate',P.name));
-  g.setTransform(sc,0,0,sc,0,0); g.imageSmoothingEnabled=true; g.filter='none'; g.globalAlpha=1; g.globalCompositeOperation='source-over';
+  g.setTransform(sc,0,0,sc,0,0); g.imageSmoothingEnabled=true;
   g.fillStyle=COL.bg; g.fillRect(0,0,LW,LH);
   P.fn(S,R);
   g.setTransform(1,0,0,1,0,0);
@@ -409,7 +411,7 @@ plate('reach',{len:2*BAR, build(W,{pen,b}){
 /* =====================================================================
    BOOT
    ===================================================================== */
-const MAIN=document.getElementById('c');
+const MAIN=document.getElementById('c'); MAIN.getContext('2d',{willReadFrequently:true});   // read back every frame: keep it on the CPU
 window.RISO={
   fps:FPS,
   get total(){ return TOTAL(); },

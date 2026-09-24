@@ -12,7 +12,7 @@ put(){ if [ -e "$2" ] && [ $FORCE = 0 ]; then echo "  keep   $2 (exists, use --f
 put "$SKILL/assets/$PAGE" index.html
 put "$SKILL/assets/audio-template.mjs" audio.mjs
 put "$SKILL/assets/storyboard.md" storyboard.md
-for f in look.mjs render.mjs build.sh make.sh export-curves.mjs inject.mjs portrait.sh trace.py doctor.sh; do put "$HERE/$f" "scripts/$f"; done
+for f in look.mjs check.mjs render.mjs build.sh make.sh export-curves.mjs inject.mjs portrait.sh trace.py doctor.sh; do put "$HERE/$f" "scripts/$f"; done
 chmod +x scripts/*.sh scripts/*.mjs 2>/dev/null || true
 if [ ! -f package.json ]; then cat > package.json <<'JSON'
 {
@@ -24,6 +24,7 @@ if [ ! -f package.json ]; then cat > package.json <<'JSON'
     "shot": "node scripts/look.mjs shot",
     "sheet": "node scripts/look.mjs sheet",
     "info": "node scripts/look.mjs info",
+    "check": "node scripts/check.mjs",
     "curves": "node scripts/export-curves.mjs curves.json",
     "audio": "node scripts/export-curves.mjs curves.json && node audio.mjs track.wav",
     "render": "node scripts/render.mjs frames 7 1920 5",

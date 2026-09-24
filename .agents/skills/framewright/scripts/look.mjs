@@ -14,10 +14,10 @@ const html = path.resolve(process.env.HTML || 'index.html');
 const outDir = process.env.OUT_DIR || 'shots';
 if (!fs.existsSync(html)) { console.error(`no such file: ${html} (set HTML=path)`); process.exit(1); }
 
-const b = await puppeteer.launch({ headless: true, protocolTimeout: 600000, args: ['--allow-file-access-from-files'] });
+const b = await puppeteer.launch({ headless: true, protocolTimeout: 600000, args: ['--allow-file-access-from-files', '--disable-accelerated-2d-canvas'] });
 const p = await b.newPage();
 p.on('pageerror', e => console.error('PAGE ERROR', e.message));
-p.on('console', m => { if (m.type() === 'error' || m.type() === 'warning') console.error('CONSOLE', m.text()); });
+p.on('console', m => { if (['error', 'warn', 'warning'].includes(m.type()) && !/^Canvas2D: Multiple readback/.test(m.text())) console.error('CONSOLE', m.text()); });   // puppeteer >= 22 reports console.warn as 'warn'
 
 async function open(seed) {
   const url = 'file://' + html + `?f=0&w=320&s=${seed}` + (process.env.AR ? `&ar=${process.env.AR}` : '');

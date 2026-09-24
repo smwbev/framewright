@@ -27,7 +27,9 @@ CLAUDE.md, GEMINI.md              one-line imports of this file for Claude Code 
 .gemini/settings.json             tells Gemini CLI to read AGENTS.md
 .agents/skills/framewright/       the skill: SKILL.md, references/, scripts/, assets/
 .claude/skills/framewright        symlink to the skill for Claude Code
-examples/ris-tv/                  a finished 40-second video: index.html, audio.mjs, previews
+examples/ris-tv/                  a finished 40-second video in scenes: index.html, audio.mjs, previews
+examples/honeybee/                a finished 56-second film in one take, built as one world
+examples/world-demo/              a preview of the demo that init.sh --world scaffolds
 package.json                      npm scripts and the puppeteer dependency for this folder
 ```
 
@@ -42,7 +44,7 @@ built when the user works inside this clone.
 - Verify by rendering frames and looking at them (`node scripts/look.mjs shot ...`,
   `... sheet ...`). Never conclude from reading code that a frame looks right.
 - Build one scene at a time. A contact sheet of the whole video comes before the full
-  render.
+  render, and `node scripts/check.mjs` must say OK before it (`make.sh` runs it).
 - Scene lengths are multiples of the beat. Sound is written last, to the locked lengths.
 - Keep helpers above the plates block in `index.html`.
 - Never commit `frames/`, `shots/`, `*.mp4`, `*.wav`, `portrait.js`, `curves.json` or the user's photos.
@@ -59,11 +61,12 @@ bash .agents/skills/framewright/scripts/init.sh --world         # the same for a
 npm install                                                     # puppeteer
 node scripts/look.mjs shot 0,30,60 1200 7                       # frames to look at
 node scripts/look.mjs sheet 24 480 7 shots/sheet.png            # contact sheet
+node scripts/check.mjs                                          # determinism check before the render
 node scripts/render.mjs frames 7 1920 5 && bash scripts/build.sh out.mp4
 bash scripts/make.sh [photo.jpg]                                # portrait, audio, render, build in one go
 ```
 
-## The example
+## Examples
 
 `examples/ris-tv/index.html` is a complete video in the retro TV style: power-on, test
 card, a countdown that breaks, two teletext pages, an oscilloscope, a portrait that locks in,
@@ -71,3 +74,8 @@ power-off. Read it as a worked example of plates, helpers, transitions and post-
 Its portrait block holds a synthetic placeholder; real projects generate that block from a
 photo. Render it with
 `HTML=examples/ris-tv/index.html node .agents/skills/framewright/scripts/look.mjs sheet 24 480 7 shots/example.png`.
+
+`examples/honeybee/index.html` is a complete film in one take, built as one continuous world:
+builders, the pen and its line, camera keys, the light layer, a soundtrack driven by curves
+exported from the page. Read it together with `references/world.md`; it predates
+`assets/world.html`, which generalizes its engine.

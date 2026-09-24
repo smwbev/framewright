@@ -83,11 +83,16 @@ Per-pixel effects use a linear congruential generator seeded with `hash(seed, 'g
 
 ## 5. The engine
 
-`renderFrame(n, width, seed, target)`: even height, content canvas at output size,
-context scaled by `width / LW`, background fill, `P.fn(S, R)`, edge transition (`cutIn`,
-`cutOut`), reset transform, `post()` into the target. It returns `S` so the sheet can label
-cells. `locate(n)` maps a global frame to a plate and a local frame. `TOTAL()` sums plate
-lengths; `look.mjs info` prints them.
+`renderFrame(n, width, seed, target)`: even height, content canvas at output size, its
+context wiped (`wipe(g)`: `reset()`, so no save, clip, shadow or composite mode survives from
+the previous frame), context scaled by `width / LW`, background fill, `P.fn(S, R)`, edge
+transition (`cutIn`, `cutOut`), reset transform, `post()` into the target. It returns `S` so
+the sheet can label cells. `locate(n)` maps a global frame to a plate and a local frame.
+`TOTAL()` sums plate lengths; `look.mjs info` prints them.
+
+`COL` and `ease` are frozen: a plate that edits a shared value throws at once instead of
+changing every later frame of its tab. Any offscreen canvas a plate keeps (`cvs(name, w, h)`)
+is wiped or cleared before it is drawn.
 
 `post(src, dst, S, o)` is the style's finisher. The skeleton ships grain and vignette;
 replace or extend it per `styles.md`. A per-pixel pass over 1920×1080 costs 50 ms for
@@ -165,8 +170,16 @@ draw it with the current style; the same points serve stroke reveal, fill and ji
 node scripts/look.mjs shot 0,45,115 1200 7          # first, middle, five before the end
 node scripts/look.mjs sheet 24 480 7 shots/sheet.png
 node scripts/look.mjs info                          # plates, lengths, seconds
+node scripts/check.mjs                              # before a full render: OK or a list of problems
 ffmpeg -y -i shots/f0770.png -vf "crop=900:300:160:560" shots/crop.png   # small text at full size
 ```
+
+`check.mjs` is the machine half of the review: pixels of sample frames identical in seven
+render orders, no clock or `Math.random` in the source, no file requested by the page, plate
+lengths on the beat, a BPM that divides into frames, no flat frame inside a plate, no plate that
+stands still, and the time of one full-size frame. Every script starts Chrome with
+`--disable-accelerated-2d-canvas`: an accelerated canvas switches to software after a few
+readbacks, and the same frame then comes out slightly different in a fresh tab and in a used one.
 
 Look at every PNG with the image tool. The script prints page errors and console warnings;
 a black frame without an error message means a plate threw before drawing, so read the
@@ -191,6 +204,12 @@ RESUME=1 node scripts/render.mjs frames 7 1920 5
 bash scripts/build.sh out.mp4               # CRF=22, maxrate 14M, yuv420p, faststart, AAC 192k
 AR=9:16 node scripts/render.mjs frames-v 7 1080 5 && bash scripts/build.sh out-vertical.mp4 frames-v
 ```
+
+`build.sh` converts the sRGB frames with the BT.709 matrix and tags the file (BT.709 primaries
+and matrix, sRGB transfer, limited range). ffmpeg alone would convert with BT.601 and leave the
+matrix untagged; players read HD video as BT.709, so saturated colours shift, pure green by 39
+levels in a measured test. The MP4 is written under a temporary name and appears only when the
+encode succeeded.
 
 PNG frames weigh 1.5–2.5 MB each; a minute of video is 3–4 GB, ignored by git. CRF 22 with a
 14 Mbit/s cap gives about 0.7 MB per second on noisy styles and half that on flat styles;
@@ -219,7 +238,7 @@ index.html        the video
 audio.mjs         the soundtrack
 storyboard.md     the plan
 curves.json       plate starts and per-frame curves for the sound, written by export-curves, ignored by git
-scripts/          look, render, build, make, export-curves, inject, portrait, trace, doctor
+scripts/          look, check, render, build, make, export-curves, inject, portrait, trace, doctor
 shots/            frames and sheets for eyes, ignored by git
 frames/           PNG frames, ignored by git
 package.json      npm scripts and the puppeteer dependency

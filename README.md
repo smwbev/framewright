@@ -1,7 +1,7 @@
 <h1 align="center">framewright</h1>
 
 <p align="center">
-  <a href="https://github.com/smwbev/framewright/releases"><img src="https://img.shields.io/badge/version-1.1.0-08C?style=flat" alt="Version 1.1.0" /></a>
+  <a href="https://github.com/smwbev/framewright/releases"><img src="https://img.shields.io/badge/version-1.2.0-08C?style=flat" alt="Version 1.2.0" /></a>
   <a href="https://agentskills.io"><img src="https://img.shields.io/badge/agent%20skill-agentskills.io-08C?style=flat" alt="Follows the Agent Skills specification" /></a>
   <a href="https://agents.md"><img src="https://img.shields.io/badge/AGENTS.md-ready-08C?style=flat" alt="Ships an AGENTS.md" /></a>
   <img src="https://img.shields.io/badge/agents-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Gemini%20CLI%20%C2%B7%20Cursor-4493F8?style=flat" alt="Works with Claude Code, Codex, Gemini CLI, Cursor and more" />
@@ -29,7 +29,7 @@
   <img src="examples/ris-tv/contact-sheet.jpg" alt="Contact sheet of all eight scenes of the example" width="960" />
 </p>
 
-<p align="center"><sub>The example: 40 seconds, 8 scenes, 1200 frames, one 45 KB HTML file. The portrait scene in the public example uses a synthetic placeholder. Full MP4 with sound: <a href="https://github.com/smwbev/framewright/releases/download/v1.0.0/ris-tv-sample.mp4">ris-tv-sample.mp4</a> (27 MB).</sub></p>
+<p align="center"><sub>The RIS TV example: 40 seconds, 8 scenes, 1200 frames, one 45 KB HTML file. The portrait scene in the public example uses a synthetic placeholder. Full MP4 with sound: <a href="https://github.com/smwbev/framewright/releases/download/v1.0.0/ris-tv-sample.mp4">ris-tv-sample.mp4</a> (27 MB).</sub></p>
 
 ## What it does
 
@@ -40,10 +40,8 @@ the frames, synthesizes a soundtrack to the locked scene lengths, assembles the 
 checks the file. Photos become posterized polygons, never pixels. Every step has a visual
 checkpoint and a rule against guessing.
 
-For a film without cuts it builds one continuous world instead of separate scenes: a line that
-remembers when each of its points was drawn, a camera on keyframes with even zooms and smooth
-following, a light layer with bloom, and a soundtrack that follows the line's speed and position
-on screen.
+For a film without cuts it builds one continuous world instead of separate scenes (see
+[below](#one-world-instead-of-separate-scenes)).
 
 | Step | What the agent does | What you see |
 |---|---|---|
@@ -53,9 +51,34 @@ on screen.
 | 3 | storyboard in bars, scaffold from the skeleton, first frame | one "go" |
 | 4 | one scene at a time, three frames per scene, a contact sheet every 2–3 scenes | contact sheets |
 | 5 | photos traced into polygons, placeholders until files arrive | a portrait preview |
-| 6 | full contact sheet, render in parallel tabs, encode, verify from the MP4 | a preview MP4 |
+| 6 | full contact sheet, a determinism check, render in parallel tabs, encode, verify from the MP4 | a preview MP4 |
 | 7 | soundtrack synthesized to the cue map, MP4 rebuilt | the final MP4 |
 | 8 | variations on request: another seed, vertical cut, GIF, poster frame | files |
+
+Before the full render a check renders sample frames of every scene in seven different orders
+and demands identical pixels, scans the source for clocks and `Math.random`, and fails if the page
+loads any file. The MP4 is encoded with the BT.709 matrix and tagged, so players show the colours
+that were reviewed.
+
+## One world instead of separate scenes
+
+When the story is one journey told without cuts, the scenes stop being separate pictures. Each
+becomes a builder that adds its part to one world: a line that remembers when each of its points
+was drawn, camera keys with even zooms and smooth following, light with bloom, titles. Every frame
+is drawn from that world and is still a pure function of (frame, seed, width). The soundtrack reads
+the line's speed and position on screen from the film. Start one with `init.sh --world`; the method
+is in `references/world.md`.
+
+<p align="center">
+  <img src="examples/world-demo/preview.webp" alt="The world demo: a line draws a ring and a square, a lid covers the square, the line travels on through three growing loops while the camera pulls back" width="400" />
+  <img src="examples/honeybee/preview.webp" alt="One line: a golden line draws a bee's life from an egg in a cell to the comb, the hive, a meadow and a last flight at sunset" width="400" />
+</p>
+
+<p align="center"><sub>Left: <a href="examples/world-demo">the world demo</a> that <code>init.sh --world</code> scaffolds, 8 seconds. Right: <a href="examples/honeybee">One line</a>, the life of a worker bee in one take, 56 seconds, 1680 frames, one 57 KB HTML file, shown at 5× speed; titles in Russian. Full MP4 with sound: <a href="https://github.com/smwbev/framewright/releases/download/v1.2.0/honeybee-sample.mp4">honeybee-sample.mp4</a> (13 MB).</sub></p>
+
+<p align="center">
+  <img src="examples/honeybee/contact-sheet.jpg" alt="Contact sheet of One line: egg, larva, cap, comb, first flight, meadow, dance, last flight, drop of honey" width="960" />
+</p>
 
 ## Quick start
 
@@ -117,15 +140,18 @@ CLAUDE.md, GEMINI.md           one-line imports of AGENTS.md
 .agents/skills/framewright/
   SKILL.md                     the workflow
   references/                  questionnaire and concept generator, styles, engine guide, one-world films, audio, photo, troubleshooting
-  scripts/                     doctor, init, look, render, build, make, export-curves, trace, inject, portrait
+  scripts/                     doctor, init, look, check, render, build, make, export-curves, trace, inject, portrait
   assets/                      skeleton.html, world.html, audio-template.mjs, storyboard.md
 .claude/skills/framewright     symlink for Claude Code
-examples/ris-tv/               a finished video: index.html, audio.mjs, previews
+examples/ris-tv/               a finished video in scenes: index.html, audio.mjs, previews
+examples/honeybee/             a finished one-take film built as one world: index.html, audio.mjs, previews
+examples/world-demo/           a preview of the demo that init.sh --world scaffolds
 ```
 
-## The example
+## Examples
 
-`examples/ris-tv` is a complete 40-second video in the retro TV style: the set powers on,
+`examples/ris-tv` is a complete 40-second video in the retro TV style, made of scenes joined by
+cuts: the set powers on,
 snow and NO SIGNAL, a test card with a day counter, a countdown that breaks, two teletext
 pages with the question, an oscilloscope tracing a paperclip, a portrait that locks in, and
 the tube switching off. Render a contact sheet of it:
@@ -137,6 +163,15 @@ npm run example        # writes shots/example-sheet.png
 
 Or render the whole thing: `HTML=examples/ris-tv/index.html node .agents/skills/framewright/scripts/render.mjs frames 7 1920 5`,
 then `cd examples/ris-tv && node audio.mjs ../../track.wav`, then `bash .agents/skills/framewright/scripts/build.sh out.mp4`.
+
+`examples/honeybee` is "One line", a complete 56-second film in one take: a golden line draws a
+worker bee's life from an egg in a cell to the comb, the hive, a meadow, the waggle dance and a
+last flight at sunset, and its last point falls back into the comb as a drop of honey. It is the
+one-world method at full scale, with a soundtrack driven by the line. `npm run example:honeybee`
+writes its contact sheet; the full render is described in its README.
+
+`examples/world-demo` shows the eight-second demo that `init.sh --world` scaffolds as a starting
+point for a film of your own.
 
 ## Making videos by hand
 

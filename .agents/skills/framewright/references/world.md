@@ -2,6 +2,7 @@
 
 Read before building a film without cuts. Everything here is implemented in `assets/world.html`;
 `init.sh --world` scaffolds it as `index.html` with a two-plate demo that renders out of the box.
+`examples/honeybee` in the repository is a finished 56-second film built this way.
 
 ## 1. When
 
@@ -157,6 +158,9 @@ one before the next begins. `buildWorld` warns about overlaps, and `look.mjs` pr
 - An empty scene is a scale problem. Bring the camera closer (smaller `z`) or make the object
   bigger; more detail makes a scene busier, not fuller.
 - A busy close-up: lower `W.spot`, darken the set, before removing anything.
+- `node scripts/check.mjs` before the full render: the world is cached per seed, and any state a
+  builder or a draw function keeps outside `W` shows up there as a frame that changes with render
+  order.
 - The vertical cut loses the sides of the landscape frame and gains top and bottom. Render its own
   sheet with `AR=9:16`; if the subject leaves the frame, add `oy` or `w` on the keys of that
   section rather than a second camera.

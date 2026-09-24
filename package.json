@@ -1,6 +1,6 @@
 {
   "name": "framewright",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "description": "Procedural one-file videos made by coding agents: brief, concepts, storyboard, scenes, render, sound.",
@@ -12,12 +12,14 @@
     "shot": "node scripts/look.mjs shot",
     "sheet": "node scripts/look.mjs sheet",
     "info": "node scripts/look.mjs info",
+    "check": "node scripts/check.mjs",
     "curves": "node scripts/export-curves.mjs curves.json",
     "audio": "node scripts/export-curves.mjs curves.json && node audio.mjs track.wav",
     "render": "node scripts/render.mjs frames 7 1920 5",
     "build": "bash scripts/build.sh out.mp4",
     "make": "bash scripts/make.sh",
-    "example": "HTML=examples/ris-tv/index.html node .agents/skills/framewright/scripts/look.mjs sheet 24 480 7 shots/example-sheet.png"
+    "example": "HTML=examples/ris-tv/index.html node .agents/skills/framewright/scripts/look.mjs sheet 24 480 7 shots/example-sheet.png",
+    "example:honeybee": "HTML=examples/honeybee/index.html node .agents/skills/framewright/scripts/look.mjs sheet 24 480 7 shots/honeybee-sheet.png"
   },
   "dependencies": { "puppeteer": "^23.11.1" }
 }
