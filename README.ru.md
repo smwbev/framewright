@@ -1,7 +1,7 @@
 <h1 align="center">framewright</h1>
 
 <p align="center">
-  <a href="https://github.com/smwbev/framewright/releases"><img src="https://img.shields.io/badge/version-1.0.0-08C?style=flat" alt="Версия 1.0.0" /></a>
+  <a href="https://github.com/smwbev/framewright/releases"><img src="https://img.shields.io/badge/version-1.1.0-08C?style=flat" alt="Версия 1.1.0" /></a>
   <a href="https://agentskills.io"><img src="https://img.shields.io/badge/agent%20skill-agentskills.io-08C?style=flat" alt="Соответствует спецификации Agent Skills" /></a>
   <a href="https://agents.md"><img src="https://img.shields.io/badge/AGENTS.md-ready-08C?style=flat" alt="В комплекте AGENTS.md" /></a>
   <img src="https://img.shields.io/badge/agents-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Gemini%20CLI%20%C2%B7%20Cursor-4493F8?style=flat" alt="Работает с Claude Code, Codex, Gemini CLI, Cursor и другими" />
@@ -39,6 +39,10 @@
 рендер кадров, синтез звука под зафиксированные длины сцен, сборка mp4 и проверка файла.
 Фотографии превращаются в постеризованные полигоны, а не в пиксели. У каждого шага есть
 визуальная контрольная точка и запрет на «и так понятно».
+
+Для фильма без склеек агент строит не отдельные сцены, а один непрерывный мир: линию, которая
+помнит, когда нарисована каждая её точка, камеру по ключевым кадрам с ровными наездами и мягким
+следованием, слой света с ореолом и звук, который идёт за скоростью и положением линии на экране.
 
 | Шаг | Что делает агент | Что видите вы |
 |---|---|---|
@@ -111,9 +115,9 @@ CLAUDE.md, GEMINI.md           однострочные импорты AGENTS.md
 .gemini/settings.json          Gemini CLI читает AGENTS.md
 .agents/skills/framewright/
   SKILL.md                     сам рабочий процесс
-  references/                  опросник и генератор концепций, стили, движок, звук, фото, починки
-  scripts/                     doctor, init, look, render, build, make, trace, inject, portrait
-  assets/                      skeleton.html, audio-template.mjs, storyboard.md
+  references/                  опросник и генератор концепций, стили, движок, фильмы одним миром, звук, фото, починки
+  scripts/                     doctor, init, look, render, build, make, export-curves, trace, inject, portrait
+  assets/                      skeleton.html, world.html, audio-template.mjs, storyboard.md
 .claude/skills/framewright     симлинк для Claude Code
 examples/ris-tv/               готовый ролик: index.html, audio.mjs, превью
 ```
@@ -137,9 +141,10 @@ npm run example        # запишет shots/example-sheet.png
 
 Скилл заодно и учебник. `references/guide.md` описывает движок, хелперы, музыкальную сетку и
 протокол просмотра; `references/styles.md` это каталог двенадцати визуальных систем с рецептами
-пост-обработки; `references/audio.md` и `references/photo.md` про звук и портреты.
-`assets/skeleton.html` рабочая отправная точка: откройте в браузере для живого предпросмотра,
-добавьте `?f=30&w=1200` для одного кадра или `?grid=24` для контрольного листа.
+пост-обработки; `references/world.md` про фильмы одним непрерывным миром; `references/audio.md`
+и `references/photo.md` про звук и портреты. `assets/skeleton.html` и `assets/world.html`
+рабочие отправные точки: откройте любой в браузере для живого предпросмотра, добавьте
+`?f=30&w=1200` для одного кадра или `?grid=24` для контрольного листа.
 
 ## Лицензия
 

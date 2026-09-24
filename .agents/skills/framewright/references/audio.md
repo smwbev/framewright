@@ -7,12 +7,17 @@ writes a 16-bit stereo WAV that `build.sh` muxes into the MP4.
 ## 1. The timeline table
 
 ```bash
-node scripts/look.mjs info
+node scripts/export-curves.mjs curves.json    # make.sh and `npm run audio` do this first
 ```
 
-Copy plate starts in seconds into `T` in `audio.mjs`, plus `end`. `T` mirrors the plates;
-when a plate length changes, `T` changes in the same commit and the WAV is regenerated. The
-beat grid is the same as the video's: at 120 BPM `BEAT = 0.5`, `BAR = 2.0`.
+`audio.mjs` builds `T` (plate starts in seconds, plus `end`) and `BPM` from `curves.json`, which
+the export script takes from the page's `RISO.curves()`, so the sound cannot drift from the
+picture when a plate changes length: export again, regenerate the WAV. The template warns when `curves.json`
+is older than `index.html`. For a page without `curves()` (projects made before it existed),
+copy the starts from `node scripts/look.mjs info` into the fallback table by hand. The beat
+grid is the same as the video's: at 120 BPM `BEAT = 0.5`, `BAR = 2.0`. An event that must land
+on a frame takes its time from the film, `T.plate + beats * BEAT` or `frame / fps`, never from
+seconds retyped by hand.
 
 ## 2. Cue map
 
@@ -75,7 +80,9 @@ ffmpeg -i track.wav -af ebur128 -f null - 2>&1 | grep -A2 "Integrated"
 
 Read the waveform against the plate table: every plate has visible activity, the beat
 sections show even spikes, the ending decays to zero, nothing is a solid block pinned to the
-ceiling. Loudness around −14 LUFS integrated suits social platforms; for a chat it does not
+ceiling. A voice that follows the picture (section 7) is checked alone: comment out the other
+events, render, and compare its loudness per few frames with the `sp` column of `curves.json`;
+the two must rise and fall together, the sound a frame or two behind. Loudness around −14 LUFS integrated suits social platforms; for a chat it does not
 matter. The waveform picture goes to the user only if they ask; the MP4 is the proof.
 
 ## 6. Room for the user's track
@@ -84,3 +91,33 @@ When the user brings a track: ask its BPM, set `BPM` in both the HTML and `audio
 cuts on bars, deliver the MP4 without audio (`build.sh` does that when `track.wav` is
 absent) and a note with the timecodes of the cuts. When a voice-over comes later, leave the
 bed only and no melodic elements under the lines of text.
+
+## 7. Sound that follows the picture
+
+In a world film (`references/world.md`) the sound can read the picture instead of a cue list.
+`RISO.curves()` adds one record per frame to `curves.json`:
+
+| field | meaning |
+|---|---|
+| `sp` | speed of the line's head on screen, logical px per frame; 0 while it rests |
+| `pan` | the head's position on screen, −1 left edge … 1 right edge |
+| `z` | the camera: world units across the short side |
+
+Add fields the sound needs (a character on screen, a second head) in `curves()` the same way.
+In `audio.mjs`, `at(t)` interpolates the records at time `t`, and `follow(fn, opts)` runs a voice
+sample by sample: `fn(c, t)` returns `{f, a, pan}`. Mapping that worked in a finished film:
+
+- loudness from speed with a soft curve and a ceiling: `a = amp · clamp(sp / sMax)^0.8`, with
+  `sMax` the speed of a brisk stroke, 20–35 px per frame;
+- pitch rises a little with speed, 2–6 %, never enough to read as a melody;
+- pan follows the head's screen position times 0.8, so nothing sits hard in one ear;
+- every control is smoothed by a one-pole follower of 20–30 ms (`follow` does it), or the 33 ms
+  steps between frames zipper;
+- a line being drawn: `tone`, a sine with 0.28 of the second harmonic on a chord tone of the pad,
+  around 0.05;
+- a creature in flight: `buzz`, two saws a hair apart (1 : 2.003) through two one-pole low-passes
+  near 1.1 kHz, at 200–250 Hz, louder and slightly higher in fast flight, a tremolo of 15–20 Hz
+  when it wiggles;
+- when the line stops for good, let the voice die with it; silence after a long drone is an event.
+
+The curves come from the main aspect; one track serves the vertical cut too.

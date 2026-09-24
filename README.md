@@ -1,7 +1,7 @@
 <h1 align="center">framewright</h1>
 
 <p align="center">
-  <a href="https://github.com/smwbev/framewright/releases"><img src="https://img.shields.io/badge/version-1.0.0-08C?style=flat" alt="Version 1.0.0" /></a>
+  <a href="https://github.com/smwbev/framewright/releases"><img src="https://img.shields.io/badge/version-1.1.0-08C?style=flat" alt="Version 1.1.0" /></a>
   <a href="https://agentskills.io"><img src="https://img.shields.io/badge/agent%20skill-agentskills.io-08C?style=flat" alt="Follows the Agent Skills specification" /></a>
   <a href="https://agents.md"><img src="https://img.shields.io/badge/AGENTS.md-ready-08C?style=flat" alt="Ships an AGENTS.md" /></a>
   <img src="https://img.shields.io/badge/agents-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Gemini%20CLI%20%C2%B7%20Cursor-4493F8?style=flat" alt="Works with Claude Code, Codex, Gemini CLI, Cursor and more" />
@@ -39,6 +39,11 @@ then builds the video scene by scene, looking at rendered frames after every ste
 the frames, synthesizes a soundtrack to the locked scene lengths, assembles the MP4 and
 checks the file. Photos become posterized polygons, never pixels. Every step has a visual
 checkpoint and a rule against guessing.
+
+For a film without cuts it builds one continuous world instead of separate scenes: a line that
+remembers when each of its points was drawn, a camera on keyframes with even zooms and smooth
+following, a light layer with bloom, and a soundtrack that follows the line's speed and position
+on screen.
 
 | Step | What the agent does | What you see |
 |---|---|---|
@@ -111,9 +116,9 @@ CLAUDE.md, GEMINI.md           one-line imports of AGENTS.md
 .gemini/settings.json          Gemini CLI reads AGENTS.md
 .agents/skills/framewright/
   SKILL.md                     the workflow
-  references/                  questionnaire and concept generator, styles, engine guide, audio, photo, troubleshooting
-  scripts/                     doctor, init, look, render, build, make, trace, inject, portrait
-  assets/                      skeleton.html, audio-template.mjs, storyboard.md
+  references/                  questionnaire and concept generator, styles, engine guide, one-world films, audio, photo, troubleshooting
+  scripts/                     doctor, init, look, render, build, make, export-curves, trace, inject, portrait
+  assets/                      skeleton.html, world.html, audio-template.mjs, storyboard.md
 .claude/skills/framewright     symlink for Claude Code
 examples/ris-tv/               a finished video: index.html, audio.mjs, previews
 ```
@@ -137,9 +142,10 @@ then `cd examples/ris-tv && node audio.mjs ../../track.wav`, then `bash .agents/
 
 The skill is also a manual. `references/guide.md` explains the engine, the helpers, the
 timing grid and the review protocol; `references/styles.md` catalogues twelve visual systems
-with post-processing recipes; `references/audio.md` and `references/photo.md` cover sound
-and portraits. `assets/skeleton.html` is a working starting point: open it in a browser for
-a live preview, add `?f=30&w=1200` for a single frame, `?grid=24` for a contact sheet.
+with post-processing recipes; `references/world.md` covers films made as one continuous world;
+`references/audio.md` and `references/photo.md` cover sound and portraits.
+`assets/skeleton.html` and `assets/world.html` are working starting points: open one in a
+browser for a live preview, add `?f=30&w=1200` for a single frame, `?grid=24` for a contact sheet.
 
 ## License
 

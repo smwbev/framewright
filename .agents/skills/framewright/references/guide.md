@@ -3,6 +3,13 @@
 Read once before the first scene. Everything here is implemented in `assets/skeleton.html`
 and used at full scale in `examples/ris-tv/index.html`.
 
+There are two starting files. `assets/skeleton.html` is a film of separate plates joined by
+cuts: each plate draws its own picture. `assets/world.html` is one continuous world: plates are
+builders that append a line, camera keys, titles and light events to one timeline, and one
+function draws any frame of it (`init.sh --world`, method in `references/world.md`). Choose the
+world for a journey or a growth told without cuts; choose plates for bulletins, parodies, lists
+and anything cut on the beat. Everything below holds for both.
+
 ## 1. The file
 
 One HTML file, one canvas, one script. Sections in this order: parameters, generators,
@@ -22,6 +29,7 @@ Size guide: the HTML stays under 200 KB; polygon data 30–70 KB as integers.
 ?w=1920     output width; height follows the aspect and is forced even
 ?grid=24    contact sheet of evenly spaced frames with labels
 ?cw=480     cell width of the sheet
+?from=480&to=720   with grid: the sheet covers only these frames (without grid: where the preview starts)
 ?ar=16:9    aspect ratio
 no knobs    live preview in the browser, capped at 960 px
 ```
@@ -32,9 +40,15 @@ window.RISO = {
   get total(){ return TOTAL() },
   get plates(){ return PLATES.map(p => ({name: p.name, len: p.len})) },
   frame(n, width, seed){ renderFrame(n, width, seed, MAIN); return MAIN.toDataURL('image/png') },
-  contact(n, cellW){ contactSheet(n, cellW, SEED, MAIN); return MAIN.toDataURL('image/png') }
+  contact(n, cellW, f0, f1){ contactSheet(n, cellW, SEED, MAIN, f0, f1); return MAIN.toDataURL('image/png') },
+  curves(seed){ return {fps, bpm, total, start: {plate: frame}, frames: [...]} }   // for the soundtrack
 }
 ```
+
+`curves()` gives plate starts; a world film adds per-frame values (head speed and position on
+screen, camera zoom). `scripts/export-curves.mjs` writes them to `curves.json` and `audio.mjs`
+builds its timeline from that file. The world skeleton also has `stats()`, the size of the
+world, which `look.mjs info` prints.
 
 Scripts call `RISO.frame` and save the data URL. They never screenshot the page: a
 screenshot depends on CSS and device scale; `toDataURL` returns exactly the drawn pixels.
@@ -95,6 +109,11 @@ down, so per-pixel post-processing looks the way it will in the video. Labels: f
 plate, local `t`, seconds. Six columns for landscape, eight for portrait. Twenty-four cells
 cover a 40-second video every 1.7 seconds; for a 15-second video use 18.
 
+A sheet of one section: `FROM=480 TO=720 node scripts/look.mjs sheet 12 480 7 shots/sheet-b.png`
+(start frames of the plates come from `look.mjs info`). In a long film, and in a world film where
+plates flow into each other, review the section you just built this way: twelve cells over eight
+seconds catch a camera that stalls or jumps, which one cell every two seconds hides.
+
 ## 7. Text
 
 Bitmap text (`pixText`): a system bold monospace at 14 px is drawn into a small canvas, the
@@ -105,6 +124,11 @@ integer that fits a width. This gives teletext, OSD menus, terminal type, pixel-
 Vector text (`vecText`) for display sizes in poster, flat and blueprint styles. Measure
 before you place; multi-line layouts compute line height in units of `cell`, including any
 sub-line, so lines never touch.
+
+Lower titles sit on one baseline, `TITLE_Y` in both skeletons: 80 % of the height in 16:9, 70 %
+in 9:16, where the bottom fifth belongs to the platform's captions and buttons. Two titles never
+share the screen in the same place: end one before the next begins, even when both fade. The
+world skeleton warns about overlaps in the console.
 
 Cyrillic and Latin are both in Menlo and Helvetica Neue on macOS; on Linux install
 `fonts-dejavu` and use `DejaVu Sans Mono`. Rendering happens on one machine, so
@@ -120,7 +144,11 @@ cross-machine font drift is not a concern unless the HTML is rendered elsewhere.
 - Cut: the engine does it. Inside a plate, a "flash frame" (one white frame) and a "shake"
   (±8 units for 4 frames) are enough punctuation.
 - Camera: translate and scale the whole context inside the plate; ease between two
-  keyframes; never move more than 20 % of the frame per second on a hold.
+  keyframes; never move more than 20 % of the frame per second on a hold. A camera that
+  travels far (a zoom from a detail to a landscape) interpolates the zoom in log space, or it
+  rushes at the close end and crawls at the far end, and is smoothed over ±18 frames; widths that
+  must stay constant on screen are divided by the scale. `world.html` has this camera
+  (`references/world.md`, section 4).
 - Transitions between two states of one object: interpolate polylines with the same point
   count; morph by cross-fading fills only when shapes share topology.
 
@@ -144,6 +172,16 @@ Look at every PNG with the image tool. The script prints page errors and console
 a black frame without an error message means a plate threw before drawing, so read the
 output. The checklist is in `SKILL.md`, step 4.
 
+Lessons from review of a finished film:
+
+- An empty scene is a scale problem. Make the object bigger or bring the camera closer; more
+  detail makes a scene busier, not fuller.
+- In an intimate scene the set competes with the subject. Dim the decor around it with a
+  spotlight measured on screen (full near the centre, gone at about 0.6 of the frame height),
+  and open the light when the world opens (`references/world.md`, section 6).
+- Where plates flow into each other, shoot the last frame of one plate and the first frame of
+  the next side by side: nothing may jump.
+
 ## 11. Render and encode
 
 ```bash
@@ -161,12 +199,15 @@ CRF 17 is five times larger with no visible gain on a contact sheet. Keep delive
 equals frames / 30, a tile made from the file matches the sheet.
 
 For a vertical cut, composition needs its own sheet: `fit` saves the text, not the layout.
-Platform UI covers the top 15 % and bottom 20 % of vertical video.
+Platform UI covers the top 15 % and bottom 20 % of vertical video: lower titles go up to 70 %
+of the height (`TITLE_Y` does it when the aspect is vertical). One soundtrack serves both cuts.
 
 ## 12. Changing a finished video
 
-- Insert a plate: add it, shorten a neighbour to keep the total, update the sound table,
-  reshoot the sheet, re-render.
+- Insert a plate: add it, shorten a neighbour to keep the total, export the curves again (the
+  sound's timeline follows; without `curves.json` update the `T` table by hand), reshoot the
+  sheet, re-render. In a world film the next plate's first stroke now starts from a new point:
+  reshoot that boundary (`references/world.md`, section 9).
 - Change a line of text: reshoot the frames that show it and one sheet.
 - Swap a photo: rerun `portrait.sh`, reshoot the portrait plate.
 - Change the seed: nothing else changes; render and compare two sheets side by side.
@@ -177,7 +218,8 @@ Platform UI covers the top 15 % and bottom 20 % of vertical video.
 index.html        the video
 audio.mjs         the soundtrack
 storyboard.md     the plan
-scripts/          look, render, build, make, inject, portrait, trace, doctor
+curves.json       plate starts and per-frame curves for the sound, written by export-curves, ignored by git
+scripts/          look, render, build, make, export-curves, inject, portrait, trace, doctor
 shots/            frames and sheets for eyes, ignored by git
 frames/           PNG frames, ignored by git
 package.json      npm scripts and the puppeteer dependency

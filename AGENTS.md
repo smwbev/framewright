@@ -45,7 +45,7 @@ built when the user works inside this clone.
   render.
 - Scene lengths are multiples of the beat. Sound is written last, to the locked lengths.
 - Keep helpers above the plates block in `index.html`.
-- Never commit `frames/`, `shots/`, `*.mp4`, `*.wav`, `portrait.js` or the user's photos.
+- Never commit `frames/`, `shots/`, `*.mp4`, `*.wav`, `portrait.js`, `curves.json` or the user's photos.
   The `.gitignore` already excludes them; do not weaken it.
 - Ask before installing system packages. Ask before publishing anything that shows a real
   person.
@@ -55,6 +55,7 @@ built when the user works inside this clone.
 ```bash
 bash .agents/skills/framewright/scripts/doctor.sh [--install]   # toolchain
 bash .agents/skills/framewright/scripts/init.sh                 # scaffold index.html, scripts/, audio.mjs
+bash .agents/skills/framewright/scripts/init.sh --world         # the same for a film without cuts (one continuous world)
 npm install                                                     # puppeteer
 node scripts/look.mjs shot 0,30,60 1200 7                       # frames to look at
 node scripts/look.mjs sheet 24 480 7 shots/sheet.png            # contact sheet

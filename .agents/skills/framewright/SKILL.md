@@ -1,11 +1,11 @@
 ---
 name: framewright
-description: Build a short procedural video (10–60 s) as one self-contained HTML file where every frame is a pure function of (frame number, seed, width), then render it to MP4 with headless Chrome and ffmpeg, with a synthesized soundtrack and optional photo-to-vector portraits. Use when the user asks for an animated clip, motion graphics, an intro or outro, a video greeting, shout-out or question addressed to someone, a teaser, kinetic typography, a retro TV, risograph, terminal or blueprint style animation, or wants "a video from code" without stock footage or video editors. Runs an interactive brief, proposes three concepts, storyboards to a beat grid, builds scene by scene with visual checks, verifies the final MP4.
+description: Build a short procedural video (10–60 s) as one self-contained HTML file where every frame is a pure function of (frame number, seed, width), then render it to MP4 with headless Chrome and ffmpeg, with a synthesized soundtrack and optional photo-to-vector portraits. Use when the user asks for an animated clip, motion graphics, an intro or outro, a video greeting, shout-out or question addressed to someone, a teaser, kinetic typography, a retro TV, risograph, terminal or blueprint style animation, a one-take film where a single line or camera journey carries the story, or wants "a video from code" without stock footage or video editors. Runs an interactive brief, proposes three concepts, storyboards to a beat grid, builds scene by scene with visual checks, verifies the final MP4.
 license: MIT
 compatibility: Node 20+, Chrome via Puppeteer, ffmpeg with libx264. Python 3 with numpy, scipy and Pillow only for photo tracing. macOS and Linux; Windows through WSL.
 metadata:
   author: smwbev
-  version: "1.0.0"
+  version: "1.1.0"
   homepage: https://github.com/smwbev/framewright
 ---
 
@@ -99,7 +99,9 @@ arcade attract mode, safety card, weather forecast, teletext). For each concept 
 a one-sentence logline, the visual system and palette, three to five key scenes in order, the
 ending, a sound sketch, why it fits, and its main risk. Present a compact table, recommend
 one, and ask the user to pick. The method and worked examples are in
-`references/questionnaire.md`.
+`references/questionnaire.md`. A concept whose logline is one journey without cuts (a line that
+never lifts, a flight from a detail out to a landscape) is built as one continuous world
+(`references/world.md`); say so in its row, because it changes how scenes are built and changed.
 
 ## Step 3. Storyboard and scaffold
 
@@ -112,6 +114,7 @@ Then scaffold:
 
 ```bash
 bash SKILL_DIR/scripts/init.sh           # index.html, scripts/, audio.mjs, storyboard.md, package.json
+bash SKILL_DIR/scripts/init.sh . --world # the same, but index.html is the one-world skeleton (no cuts)
 npm install                              # puppeteer (Chrome comes from the cache or is downloaded once)
 node scripts/look.mjs shot 0,30,60 1200 7
 ```
@@ -134,20 +137,28 @@ Read `references/guide.md` once before the first scene. The essentials:
 - Helpers live above the plates block, never between plates.
 - Transitions are drawn by the engine at plate edges (`cutIn`/`cutOut` flags); scenes do
   not know about them.
+- A world film (`--world`) has no cuts. Plates are builders, `build(W, {pen, b, R})`, that
+  append to one timeline: `b(x)` is beat x of the plate, the pen continues the line from where
+  the previous plate left it, `camKey` moves one camera, `title` adds text. Read
+  `references/world.md` before the first builder.
 
 Per scene: write it, shoot the first frame, one in the middle, one five frames before the
 end, look, fix, look again. After every two or three scenes:
 
 ```bash
 node scripts/look.mjs sheet 24 480 7 shots/sheet.png
+FROM=240 TO=480 node scripts/look.mjs sheet 12 480 7 shots/sheet-b.png   # one section, denser
 ```
 
 Checklist for the sheet, each item with your eyes: every cell reads as a still in 1.5
 seconds; no text is clipped; neighbouring lines and panels do not touch; two adjacent cells
 of one plate never look identical; cuts land where planned and do not eat the first frame
 of a scene; nothing important sits in the outer 8 %; colour is not muddy; thin lines do not
-crumble; the main event sits on its planned second; the last frame looks like an ending.
-A scene that fails "1.5 seconds" gets redesigned, not decorated.
+crumble; the main event sits on its planned second; the last frame looks like an ending;
+no two titles share the screen in the same place. A scene that fails "1.5 seconds" gets
+redesigned, not decorated. An empty scene gets a bigger object or a closer camera, never more
+detail; a busy close-up gets its decor dimmed around the subject. In a world film also shoot
+the last frame of each plate next to the first frame of the next: nothing may jump.
 
 Send the sheet to the user at these points with two sentences of status. Do not narrate
 code.
@@ -186,11 +197,15 @@ a placeholder.
 
 ## Step 7. Sound
 
-Copy the plate start times from `node scripts/look.mjs info` into the `T` table of
-`audio.mjs`, write one block of events per plate using the cue map in `references/audio.md`,
-then:
+`scripts/export-curves.mjs` writes `curves.json` from the page: plate starts, and in a world
+film the speed and screen position of the line's head for every frame. `audio.mjs` takes its
+timeline from it, so it never drifts from the picture (a page without `RISO.curves()` needs the
+starts from `look.mjs info` copied into `T` by hand). Write one block of events per plate using
+the cue map in `references/audio.md`; in a world film give the line or the character a voice
+that follows the curves (`follow()`, `references/audio.md`, section 7). Then:
 
 ```bash
+node scripts/export-curves.mjs curves.json
 node audio.mjs track.wav
 ffmpeg -i track.wav -filter_complex "showwavespic=s=1800x300:split_channels=1" -frames:v 1 shots/wave.png
 bash scripts/build.sh out.mp4
@@ -204,16 +219,19 @@ scene pinned to the ceiling. Whenever a scene length changes, regenerate the tra
 Deliver `out.mp4` (1920×1080, H.264, AAC, ~0.7 MB per second on noisy styles) and say how
 to rebuild: `bash scripts/make.sh [photo.jpg] [seed] [width]`. Offer, do not impose:
 another seed (a different impression of the same plates), a vertical cut
-(`AR=9:16 node scripts/render.mjs frames-v 7 1080 5`, then check a sheet with `AR=9:16`),
+(`AR=9:16 node scripts/render.mjs frames-v 7 1080 5`, then check a sheet with `AR=9:16`; lower
+titles sit at 70 % of the height there, `TITLE_Y`, clear of the platform's buttons),
 a GIF for chats, a poster frame (`look.mjs shot <frame> 1920`), the HTML itself as a live
 preview. Remove intermediate MP4s so one result remains.
 
 ## Changing things later
 
-Insert a scene: add the plate, shorten another to keep the total, regenerate the sound
-table, reshoot the sheet. Seeds derive from plate names, so neighbours do not change.
+Insert a scene: add the plate, shorten another to keep the total, export the curves and
+regenerate the track, reshoot the sheet. Seeds derive from plate names, so neighbours do not change.
 Change a text: reshoot the frames that show it, check `fit`. Swap a photo: rerun
-`portrait.sh`, reshoot the portrait scene. Every change ends with a sheet and a rebuilt MP4.
+`portrait.sh`, reshoot the portrait scene. In a world film a retimed plate moves later plates
+in time and the pen carries its end point over: reshoot the boundary frames
+(`references/world.md`, section 9). Every change ends with a sheet and a rebuilt MP4.
 
 ## Reference files
 
@@ -223,9 +241,15 @@ Change a text: reshoot the frames that show it, check `fit`. Swap a photo: rerun
   objects, post-processing recipes and sound palettes.
 - `references/guide.md`: the engine, helpers, timing grid, review protocol, render and
   encoding numbers, file layout.
-- `references/audio.md`: cue map, synthesis blocks, mastering, checks.
+- `references/world.md`: one continuous world for films without cuts: builders, the pen and
+  its line, the keyed camera, the light layer, occlusion and dimming, spotlight, titles,
+  review and changes, sound from the picture.
+- `references/audio.md`: cue map, synthesis blocks, mastering, checks, voices that follow the
+  picture.
 - `references/photo.md`: photo to polygons, parameters, rendering and animation of portraits.
 - `references/troubleshooting.md`: symptoms, causes, fixes, including environment traps.
-- `assets/skeleton.html`: the starting file. `assets/audio-template.mjs`: the sound toolkit.
+- `assets/skeleton.html`: the starting file. `assets/world.html`: the starting file of a world
+  film. `assets/audio-template.mjs`: the sound toolkit. `scripts/export-curves.mjs`: plate
+  starts and per-frame curves for the sound.
 - `../../examples/ris-tv/` in the repository: a finished 40-second video with eight plates,
   sound and a portrait pipeline, to read as a worked example.

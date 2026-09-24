@@ -19,6 +19,7 @@ shots/
 
 # --- generated data ---
 portrait.js
+curves.json
 *.log
 tmp/
 

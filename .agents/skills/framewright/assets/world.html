@@ -1,0 +1,440 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>framewright world</title>
+<style>
+html,body{margin:0;height:100%;background:#000;overflow:hidden}
+canvas{display:block;margin:0 auto;max-width:100vw;max-height:100vh}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+/* =====================================================================
+   framewright world skeleton: one continuous world instead of separate scenes.
+   Plates are BUILDERS. Each appends its part to one timeline: a pen writes the line with a draw
+   time per point, camera keys, titles, light events, decor. drawWorld renders any frame of that
+   world, so a frame is still a pure function of (frame number, seed, width).
+   Method: references/world.md. No images, no video, no base64, no CDN.
+   URL knobs:  ?f=140  ?s=12  ?w=1920  ?grid=24  ?cw=480  ?from=60&to=180  ?ar=9:16
+   Without knobs the page plays a live preview (capped at 960 px wide).
+   Layout: params -> generators -> math -> palette -> world helpers (line, camera, light, decor,
+   titles, drawWorld) -> post -> engine -> plates (builders) -> boot.
+   Keep every helper ABOVE the plates block.
+   ===================================================================== */
+
+/* ---------- parameters ---------- */
+const Q = new URLSearchParams(location.search);
+const FPS = 30, BPM = 120;
+const BEAT = Math.round(FPS * 60 / BPM), BAR = BEAT * 4;   // 120 BPM -> beat 15 frames, bar 60
+const SHORT = 1080;                                        // logical short side, all screen geometry lives here
+function parseAR(s){ const m=/^(\d+(?:\.\d+)?)[:x\/](\d+(?:\.\d+)?)$/.exec(s||''); return m ? (+m[1])/(+m[2]) : 16/9; }
+const AR = parseAR(Q.get('ar') || '16:9');
+const LW = AR >= 1 ? Math.round(SHORT*AR) : SHORT;         // logical width
+const LH = AR >= 1 ? SHORT : Math.round(SHORT/AR);         // logical height
+const CX = LW/2, CY = LH/2;
+const SEED  = +(Q.get('s') || 7);
+const WIDTH = +(Q.get('w') || 1920);
+const SAFE  = 0.08;                                        // keep important content this far from edges (fraction of LH)
+const TITLE_Y = AR < 1 ? 0.70 : 0.80;                      // baseline of lower titles; in 9:16 the bottom 20 % belongs to platform UI
+const FADE_IN = 0, FADE_OUT = BEAT;                        // frames from and to black; 12-24 in for a film that opens from black
+const TAU = Math.PI*2;
+
+/* ---------- generators ---------- */
+function hash(){ // any arguments -> 32-bit seed
+  let h = 2166136261 >>> 0;
+  for (let k=0;k<arguments.length;k++){ const s=String(arguments[k])+'|';
+    for (let i=0;i<s.length;i++){ h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } }
+  h ^= h>>>13; h = Math.imul(h, 0x5bd1e995); h ^= h>>>15;
+  return h >>> 0;
+}
+function rng(seed){ // sfc32
+  let a=seed>>>0, b=0x9e3779b9, c=0x6a09e667, d=0xbb67ae85;
+  const f=()=>{ a>>>=0;b>>>=0;c>>>=0;d>>>=0; let t=(a+b)|0; a=b^(b>>>9); b=(c+(c<<3))|0; c=(c<<21)|(c>>>11); d=(d+1)|0; t=(t+d)|0; c=(c+t)|0; return (t>>>0)/4294967296; };
+  for(let i=0;i<12;i++) f();
+  return {
+    f, r:(lo,hi)=>lo+(hi-lo)*f(), i:(n)=>Math.floor(f()*n), pick:(arr)=>arr[Math.floor(f()*arr.length)],
+    sign:()=>f()<0.5?-1:1, chance:(p)=>f()<p,
+    g:()=>{ let u=0,v=0; while(u===0)u=f(); while(v===0)v=f(); return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v); }
+  };
+}
+
+/* ---------- math ---------- */
+const clamp=(v,a=0,b=1)=>v<a?a:v>b?b:v;
+const lerp=(a,b,t)=>a+(b-a)*t;
+const span=(f,a,b)=>clamp((f-a)/(b-a));                    // progress of f between a and b, 0..1
+const smooth=t=>{t=clamp(t);return t*t*(3-2*t)};
+const ease={
+  out:t=>1-Math.pow(1-clamp(t),3), in:t=>Math.pow(clamp(t),3),
+  io:t=>{t=clamp(t);return t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2},
+  sio:t=>0.5-0.5*Math.cos(Math.PI*clamp(t)),               // sine in-out: the default of the pen and the camera
+  sin:t=>1-Math.cos(Math.PI/2*clamp(t)), sout:t=>Math.sin(Math.PI/2*clamp(t)),
+  back:t=>{const c=1.70158;t=clamp(t);return 1+(c+1)*Math.pow(t-1,3)+c*Math.pow(t-1,2)},
+  lin:t=>clamp(t)
+};
+function invEase(e,u){ // the time fraction at which ease e reaches u: the pen's clock (monotonic eases only)
+  const fn=ease[e]||ease.lin; if(fn===ease.lin) return clamp(u);
+  let lo=0,hi=1; for(let k=0;k<24;k++){ const m=(lo+hi)/2; if(fn(m)<u) lo=m; else hi=m; }
+  return (lo+hi)/2;
+}
+const pad=(n,w=2)=>String(n).padStart(w,'0');
+function hex2rgb(h){ const n=parseInt(h.slice(1),16); return [(n>>16)&255,(n>>8)&255,n&255]; }
+const rgb=(c,a=1)=>`rgba(${c[0]|0},${c[1]|0},${c[2]|0},${a})`;
+const mix3=(a,b,t)=>[lerp(a[0],b[0],t),lerp(a[1],b[1],t),lerp(a[2],b[2],t)];
+
+/* ---------- canvas pool ---------- */
+const POOL={};
+function cvs(name,w,h){ let c=POOL[name]; if(!c){ c=document.createElement('canvas'); POOL[name]=c; } if(c.width!==w||c.height!==h){ c.width=w; c.height=h; } return c; }
+
+/* ---------- palette (replace with the palette of your film) ---------- */
+const COL={ bg:'#06080d', line:'#8fdcff', head:'#effbff', text:'#e9eef5', dust:'#9fb3c8', lid:'#1a2533' };
+const LINE=hex2rgb(COL.line), HEAD=hex2rgb(COL.head), DUST=hex2rgb(COL.dust), LID=hex2rgb(COL.lid);
+const FONT_SANS='"Helvetica Neue", Helvetica, Arial, sans-serif';
+const FONT_SERIF='"Iowan Old Style", Palatino, "PT Serif", Georgia, serif';
+
+/* =====================================================================
+   WORLD HELPERS (all above the plates block)
+   ===================================================================== */
+
+/* ---- the line: points with a draw time ----
+   X,Y world coordinates; T the frame at which the head passes the point (fractional);
+   A memory floor: the brightness a stroke settles to after the head has passed (0..1); Wd width multiplier. */
+function newPath(){ return {X:[],Y:[],T:[],A:[],Wd:[],chunks:[]}; }
+function pathPush(P,x,y,t,a,w){ P.X.push(x); P.Y.push(y); P.T.push(t); P.A.push(a); P.Wd.push(w); }
+/* the pen. Every stroke takes its arrival frame t1 and an ease (sio io in out sin sout lin).
+   o: keep (memory floor, a number or a function of the stroke fraction u), width (the same),
+   step (resampling step in world units: 0.5, or 1-2 for long flights), warp(u,x,y) -> [dx,dy] (tremble, wiggle).
+   Points are resampled at a constant step and timed by the inverse ease, so the head follows ONE ease along the
+   whole polyline however its vertices are spaced. */
+function makePen(P,x,y,t){
+  return { P, x, y, t, keep:0.25, width:1, step:0.5,
+    start(){ pathPush(P,this.x,this.y,this.t,this.keep,this.width); return this; },
+    along(pts,t1,e='sio',o={}){
+      if(t1<this.t-1e-6){ console.warn(`pen: a stroke arrives at frame ${t1.toFixed(1)}, before the pen's time ${this.t.toFixed(1)}; the previous stroke overran`); t1=this.t; }
+      const src=[[this.x,this.y],...pts], cum=[0]; let L=0;
+      for(let i=1;i<src.length;i++){ L+=Math.hypot(src[i][0]-src[i-1][0],src[i][1]-src[i-1][1]); cum.push(L); }
+      if(L<1e-6) return this.hold(t1);
+      const n=Math.max(1,Math.ceil(L/(o.step??this.step))), t0=this.t; let j=1;
+      for(let s=1;s<=n;s++){
+        const a=L*s/n; while(j<src.length-1 && cum[j]<a) j++;
+        const fr=cum[j]-cum[j-1]>1e-9?(a-cum[j-1])/(cum[j]-cum[j-1]):1, u=a/L;
+        let px=lerp(src[j-1][0],src[j][0],fr), py=lerp(src[j-1][1],src[j][1],fr);
+        if(o.warp){ const d=o.warp(u,px,py); px+=d[0]; py+=d[1]; }
+        pathPush(P,px,py,t0+(t1-t0)*invEase(e,u),
+          typeof o.keep==='function'?o.keep(u):(o.keep??this.keep), typeof o.width==='function'?o.width(u):(o.width??this.width));
+      }
+      const last=P.X.length-1; this.x=P.X[last]; this.y=P.Y[last]; this.t=t1; return this;
+    },
+    to(x,y,t1,e,o){ return this.along([[x,y]],t1,e,o); },
+    bez(c1,c2,p,t1,e,o){ const x0=this.x, y0=this.y, pts=[];   // cubic Bezier from the current point
+      for(let i=1;i<=48;i++){ const s=i/48, m=1-s; pts.push([m*m*m*x0+3*m*m*s*c1[0]+3*m*s*s*c2[0]+s*s*s*p[0], m*m*m*y0+3*m*m*s*c1[1]+3*m*s*s*c2[1]+s*s*s*p[1]]); }
+      return this.along(pts,t1,e,o); },
+    hold(t1){ // stand still until t1: a point at the same place keeps the head from creeping into the next stroke
+      if(t1>this.t){ const n=P.X.length-1; pathPush(P,this.x,this.y,t1,n>=0?P.A[n]:this.keep,n>=0?P.Wd[n]:this.width); this.t=t1; }
+      return this; }
+  };
+}
+/* cut a finished path into Path2D chunks of up to 20 points, breaking at forced indices (covers, dims) */
+function finalizePath(P,breaks=[]){
+  const n=P.X.length, br=new Set(breaks); P.chunks=[]; let c0=0;
+  while(c0<n-1){ let c1=c0+1; while(c1<n-1 && c1-c0<20 && !br.has(c1)) c1++;
+    const p=new Path2D(); p.moveTo(P.X[c0],P.Y[c0]); for(let i=c0+1;i<=c1;i++) p.lineTo(P.X[i],P.Y[i]);
+    P.chunks.push({c0,c1,p,tEnd:P.T[c1],keep:P.A[c1],w:P.Wd[c1]}); c0=c1; }
+}
+/* the head at frame f: binary search in T, interpolated between two points; i is the point behind the head */
+function headAt(P,f){
+  const T=P.T, n=T.length; if(!n) return null;
+  if(f<T[0]) return {x:P.X[0],y:P.Y[0],i:-1,started:false};
+  if(f>=T[n-1]) return {x:P.X[n-1],y:P.Y[n-1],i:n-1,started:true};
+  let lo=0,hi=n-1; while(hi-lo>1){ const m=(lo+hi)>>1; if(T[m]<=f) lo=m; else hi=m; }
+  const dt=T[hi]-T[lo], u=dt>1e-9?(f-T[lo])/dt:0;
+  return {x:lerp(P.X[lo],P.X[hi],u),y:lerp(P.Y[lo],P.Y[hi],u),i:lo,started:true};
+}
+/* a second line with its own pen (a companion, a new start at the end); drawn like the main one */
+function extraPen(W,x,y,t){ const P=newPath(); W.more.push(P); return makePen(P,x,y,t).start(); }
+
+/* ---- drawing the line into the light layer (world coordinates) ----
+   o: i0,i1 index range; tau frames for a fresh stroke to settle to its memory floor; core, glow widths in SCREEN px
+   (divided by k, so a zoom never changes them); gain; color; dims. Each chunk is stroked twice: a wide faint glow and
+   a bright core, alpha = A + (1-A)*exp(-age/tau). Only the chunk that holds the head is rebuilt per frame. */
+function drawLine(lg,P,f,k,o={}){
+  const h=headAt(P,f); if(!h || !h.started) return h;
+  const i0=o.i0??0, i1=o.i1??Infinity; if(h.i<i0) return h;
+  const tau=o.tau??75, core=(o.core??2.3)/k, glow=(o.glow??9)/k, gain=o.gain??1, dims=o.dims||[];
+  lg.lineCap='round'; lg.lineJoin='round'; lg.strokeStyle=o.color??COL.line;
+  let partial=null;
+  for(const c of P.chunks){ if(c.c0<i0||c.c0>=i1) continue; if(c.c0>h.i) break;
+    if(c.c1>h.i){ partial=new Path2D(); partial.moveTo(P.X[c.c0],P.Y[c.c0]); for(let i=c.c0+1;i<=h.i;i++) partial.lineTo(P.X[i],P.Y[i]); partial.lineTo(h.x,h.y); break; } }
+  for(let pass=0;pass<2;pass++){
+    for(const c of P.chunks){
+      if(c.c0<i0||c.c0>=i1) continue; if(c.c0>h.i) break;
+      const full=c.c1<=h.i; let dm=1;
+      for(const d of dims) if(c.c0>=d.i0 && c.c0<d.i1) dm*=lerp(1,d.to,ease.sio(span(f,d.f0,d.f1)));
+      const a=(c.keep+(1-c.keep)*Math.exp(-(full?f-c.tEnd:0)/tau))*gain*dm;
+      if(a>=0.01){ lg.globalAlpha=pass===0?a*0.2:a; lg.lineWidth=(pass===0?glow:core)*c.w; lg.stroke(full?c.p:partial); }
+      if(!full) break;
+    }
+  }
+  lg.globalAlpha=1; return h;
+}
+/* a cover hides everything the light layer holds before its index (a lid, a wall, fog): the older part of the line is
+   drawn, cut(lg,f,k) erases it with destination-out (fill the cover's shape with its opacity), newer strokes go on top */
+function cover(W,f0,f1,cut){ const i=W.path.X.length-1; W.breaks.push(i); W.covers.push({f0,f1,i,cut}); return i; }
+/* fade the index range i0..i1 of the line to `to` of its brightness between frames f0 and f1 */
+function dim(W,i0,i1,f0,f1,to){ W.breaks.push(i0,i1); W.dims.push({i0,i1,f0,f1,to}); }
+function drawLineCovered(lg,W,f,k){
+  const cs=W.covers.filter(c=>f>=c.f0 && f<c.f1).sort((a,b)=>a.i-b.i); let i0=0;
+  for(const c of cs){ drawLine(lg,W.path,f,k,{i0,i1:c.i,dims:W.dims});
+    lg.save(); lg.globalCompositeOperation='destination-out'; c.cut(lg,f,k); lg.restore(); i0=c.i; }
+  return drawLine(lg,W.path,f,k,{i0,dims:W.dims});
+}
+function glowDot(lg,x,y,r,col,a){ // soft dot of light, r in world units (pass px/k for a screen size)
+  const gr=lg.createRadialGradient(x,y,0,x,y,r);
+  gr.addColorStop(0,rgb(col,a)); gr.addColorStop(0.25,rgb(col,a*0.45)); gr.addColorStop(1,rgb(col,0));
+  lg.fillStyle=gr; lg.beginPath(); lg.arc(x,y,r,0,TAU); lg.fill();
+}
+
+/* ---- camera: keys, follow, Gaussian smoothing ----
+   z = world units visible across the SHORT side of the frame (same subject framed in 16:9 and 9:16); k = SHORT/z.
+   o: w pull toward the head (0..1) as it was lag frames ago, ox/oy offset of that aim, e ease toward this key. */
+function camKey(W,f,x,y,z,o={}){ W.cam.push({f,x,y,z,w:o.w??0,lag:o.lag??8,ox:o.ox??0,oy:o.oy??0,e:o.e??'sio'}); }
+function camRaw(W,f){
+  const K=W.cam; let a=K[0], b=K[0], u=0;
+  if(f>=K[K.length-1].f) a=b=K[K.length-1];
+  else if(f>K[0].f){ for(let i=1;i<K.length;i++) if(f<K[i].f){ a=K[i-1]; b=K[i]; u=(ease[b.e]||ease.lin)((f-a.f)/(b.f-a.f)); break; } }
+  let x=lerp(a.x,b.x,u), y=lerp(a.y,b.y,u);
+  const z=Math.exp(lerp(Math.log(a.z),Math.log(b.z),u)), w=lerp(a.w,b.w,u);   // zoom in log space: even speed
+  if(w>0){ const h=headAt(W.path,f-lerp(a.lag,b.lag,u)); if(h){ x=lerp(x,h.x+lerp(a.ox,b.ox,u),w); y=lerp(y,h.y+lerp(a.oy,b.oy,u),w); } }
+  return {x,y,z};
+}
+function camAt(W,f){ // Gaussian over +-18 frames (sigma 6), zoom averaged in log space: corners round off, stops ease
+  let sx=0,sy=0,sz=0,sw=0;
+  for(let d=-18;d<=18;d+=2){ const wt=Math.exp(-d*d/72), c=camRaw(W,f+d); sx+=c.x*wt; sy+=c.y*wt; sz+=Math.log(c.z)*wt; sw+=wt; }
+  return {x:sx/sw,y:sy/sw,z:Math.exp(sz/sw)};
+}
+function worldTransform(g,cam,k){ g.translate(CX,CY); g.scale(k,k); g.translate(-cam.x,-cam.y); }
+function toScreen(cam,k,x,y){ return [(x-cam.x)*k+CX,(y-cam.y)*k+CY]; }
+function viewRect(cam,k,m=0){ const hw=LW/2/k+m, hh=LH/2/k+m; return {x0:cam.x-hw,x1:cam.x+hw,y0:cam.y-hh,y1:cam.y+hh}; }
+
+/* ---- decor light: a spotlight measured on SCREEN, so the pool keeps its size through a zoom ----
+   1 inside 30 % of the radius, 0 beyond it; radius W.spot(f) as a fraction of LH: ~0.6 intimate, 3+ when the world opens */
+function spotlight(W,f,cam,k,x,y){ const r1=(W.spot?W.spot(f):9)*LH, r0=r1*0.3, d=Math.hypot((x-cam.x)*k,(y-cam.y)*k); return 1-smooth((d-r0)/(r1-r0)); }
+
+/* ---- titles: a small letter-spaced line over a big one, in screen space, at TITLE_Y ----
+   o: align 'left'|'center', y (logical), smallSize, bigSize, smallColor, bigColor; small and big may be functions of the
+   frame (a counter), big may be an array of lines. Never two titles at once in the same place: checkTitles warns. */
+function title(W,f0,f1,small,big,o={}){ W.titles.push(Object.assign({f0,f1,small,big},o)); }
+function checkTitles(W){
+  const T=W.titles, Y=t=>t.y??LH*TITLE_Y, name=t=>typeof t.big==='string'?t.big:typeof t.small==='string'?t.small:'(dynamic)';
+  for(let i=0;i<T.length;i++) for(let j=i+1;j<T.length;j++){ const a=T[i], b=T[j];
+    if(a.f0<b.f1 && b.f0<a.f1 && (a.align||'left')===(b.align||'left') && Math.abs(Y(a)-Y(b))<LH*0.12)
+      console.warn(`titles overlap in frames ${Math.max(a.f0,b.f0)}-${Math.min(a.f1,b.f1)}: "${name(a)}" and "${name(b)}"`); }
+}
+function drawTitles(S,W){
+  const g=S.g, f=S.f;
+  for(const t of W.titles){
+    if(f<t.f0||f>t.f1) continue;
+    const a=Math.min(ease.out(span(f,t.f0,t.f0+14)),1-ease.in(span(f,t.f1-16,t.f1))); if(a<=0) continue;
+    const center=t.align==='center', x=center?CX:LW*0.08, maxW=LW*0.84, bs=t.bigSize||60;
+    const small=typeof t.small==='function'?t.small(f):t.small, big=typeof t.big==='function'?t.big(f):t.big;
+    let y=(t.y??LH*TITLE_Y)+(1-ease.out(span(f,t.f0,t.f0+22)))*12;
+    g.save(); g.globalAlpha=a; g.textAlign=center?'center':'left'; g.textBaseline='alphabetic';
+    g.shadowColor='rgba(0,0,0,0.55)'; g.shadowBlur=14*S.sc;          // shadowBlur ignores the transform: scale it
+    if(small){ let sz=t.smallSize||24; const set=()=>{ g.font=`600 ${sz}px ${FONT_SANS}`; g.letterSpacing=(sz*0.3).toFixed(1)+'px'; };
+      set(); const w=g.measureText(small).width; if(w>maxW){ sz*=maxW/w; set(); }
+      g.fillStyle=t.smallColor||COL.line; g.fillText(small,x,y); g.letterSpacing='0px'; y+=bs*1.08; }
+    if(big) for(const line of [].concat(big)){ let sz=bs; g.font=`italic ${sz}px ${FONT_SERIF}`;
+      const w=g.measureText(line).width; if(w>maxW){ sz*=maxW/w; g.font=`italic ${sz}px ${FONT_SERIF}`; }
+      g.fillStyle=t.bigColor||COL.text; g.fillText(line,x,y); y+=sz*1.15; }
+    g.restore();
+  }
+}
+
+/* ---- one frame of the world: decor, then the light layer (glows, line, head) with bloom, then titles and fades ---- */
+function drawWorld(S){
+  const W=getWorld(S.seed), f=S.f, g=S.g, cam=camAt(W,f), k=SHORT/cam.z;
+  S.cam=cam; S.k=k;
+  g.fillStyle=COL.bg; g.fillRect(0,0,LW,LH);
+  g.save(); worldTransform(g,cam,k);
+  for(const st of W.sets) if(f>=st.f0 && f<=st.f1) st.draw(g,f,k,cam,S);
+  g.restore();
+  // light layer: drawn in world coordinates on its own canvas, added with 'lighter' twice: blurred (bloom), then sharp
+  const L=cvs('light',S.cv.width,S.cv.height), lg=L.getContext('2d');
+  lg.setTransform(1,0,0,1,0,0); lg.clearRect(0,0,L.width,L.height);
+  lg.setTransform(S.sc,0,0,S.sc,0,0); lg.save(); worldTransform(lg,cam,k);
+  for(const gl of W.glows) if(f>=gl.f0 && f<=gl.f1) gl.draw(lg,f,k,cam,S);
+  const h=drawLineCovered(lg,W,f,k), br=W.headGlow?W.headGlow(f):1;
+  if(h && br>0){ glowDot(lg,h.x,h.y,20/k*br,LINE,0.55*br); glowDot(lg,h.x,h.y,5/k,HEAD,0.95*br); }
+  for(const P of W.more){ const h2=drawLine(lg,P,f,k); if(h2 && h2.started){ glowDot(lg,h2.x,h2.y,20/k,LINE,0.55); glowDot(lg,h2.x,h2.y,5/k,HEAD,0.95); } }
+  lg.restore();
+  g.save(); g.setTransform(1,0,0,1,0,0); g.globalCompositeOperation='lighter';
+  g.filter=`blur(${Math.max(2,S.cv.width/170)}px)`; g.globalAlpha=0.85; g.drawImage(L,0,0);
+  g.filter='none'; g.globalAlpha=1; g.drawImage(L,0,0); g.restore();
+  drawTitles(S,W);
+  const fade=Math.max(FADE_IN?1-span(f,0,FADE_IN):0, FADE_OUT?span(f,W.total-FADE_OUT,W.total-1):0);
+  if(fade>0){ g.fillStyle=`rgba(0,0,0,${fade})`; g.fillRect(0,0,LW,LH); }
+  S.post.grain=4; S.post.vig=0.35;
+}
+
+/* ---- deterministic per-pixel finisher: grain and vignette ---- */
+function post(src,dst,S,o={}){
+  const W=src.width,H=src.height, sg=src.getContext('2d'), dg=dst.getContext('2d');
+  const grain=o.grain??0, vig=o.vig??0;
+  if(!grain && !vig){ dg.drawImage(src,0,0); return; }
+  const id=sg.getImageData(0,0,W,H), d=id.data, cx=(W-1)/2, cy=(H-1)/2;
+  let z=hash(S.seed,'grain',S.f)|0;
+  for(let y=0;y<H;y++){ const ny=(y-cy)/cy;
+    for(let x=0;x<W;x++){ const i=(y*W+x)*4; const nx=(x-cx)/cx, r2=nx*nx+ny*ny;
+      z=(Math.imul(z,1664525)+1013904223)|0; const gn=((z>>>24)/255-0.5)*grain; const v=1-vig*Math.pow(r2*0.5,1.4);
+      d[i]=clamp(d[i]*v+gn,0,255); d[i+1]=clamp(d[i+1]*v+gn,0,255); d[i+2]=clamp(d[i+2]*v+gn,0,255); } }
+  dg.putImageData(id,0,0);
+}
+
+/* =====================================================================
+   ENGINE
+   ===================================================================== */
+const PLATES=[];
+/* plate(name,{len,build},fn=drawWorld). len in frames, keep it a multiple of BEAT.
+   build(W,{pen,b,t0,len,R}) appends this plate's part of the world. b(x) is the frame of beat x of this plate
+   (b(4) = one bar in); W.at(name,x) the same for any plate; R is a generator stable per plate name.
+   The pen and the camera carry over from plate to plate: there are no cuts. A plate may bring its own fn. */
+function plate(name,opts,fn=drawWorld){ if(PLATES.some(p=>p.name===name)) console.warn(`duplicate plate name: ${name}`); PLATES.push(Object.assign({name,fn},opts)); }
+function TOTAL(){ return PLATES.reduce((a,p)=>a+p.len,0); }
+function locate(n){ let acc=0; for(let i=0;i<PLATES.length;i++){ if(n<acc+PLATES[i].len) return {idx:i,local:n-acc}; acc+=PLATES[i].len; } const i=PLATES.length-1; return {idx:i,local:PLATES[i].len-1}; }
+
+/* the world is built once per seed from the builders, then every frame reads it */
+let WORLD=null, WORLD_SEED=null;
+function getWorld(seed){ if(!WORLD || WORLD_SEED!==seed){ WORLD=buildWorld(seed); WORLD_SEED=seed; } return WORLD; }
+function buildWorld(seed){
+  const W={seed,path:newPath(),more:[],cam:[],titles:[],glows:[],sets:[],covers:[],dims:[],breaks:[],start:{},total:0};
+  let acc=0; for(const p of PLATES){ W.start[p.name]=acc; acc+=p.len; } W.total=acc;
+  W.at=(name,x=0)=>W.start[name]+x*BEAT;
+  const pen=W.pen=makePen(W.path,0,0,0).start();
+  for(const p of PLATES){ if(!p.build) continue;
+    const t0=W.start[p.name], b=x=>t0+x*BEAT;
+    p.build(W,{pen,b,t0,len:p.len,R:rng(hash(seed,'build',p.name))});
+    if(pen.t>t0+p.len) console.warn(`plate ${p.name}: the pen is busy until frame ${pen.t.toFixed(0)}, after the plate ends at ${t0+p.len}`); }
+  if(!W.cam.length) camKey(W,0,0,0,SHORT);
+  W.cam.sort((a,b)=>a.f-b.f);
+  finalizePath(W.path,W.breaks); for(const P of W.more) finalizePath(P);
+  checkTitles(W);
+  return W;
+}
+
+function renderFrame(n,width,seed,target){
+  n=((n%TOTAL())+TOTAL())%TOTAL();
+  const W=Math.round(width); let H=Math.round(W/AR); if(H%2) H++;   // even height for libx264
+  const cv=cvs('content',W,H), g=cv.getContext('2d'), sc=W/LW;
+  const {idx,local}=locate(n), P=PLATES[idx];
+  const S={ f:n, i:local, t:local/P.len, len:P.len, g, cv, sc, seed, W:LW, H:LH, name:P.name, post:{},
+            b:rng(hash(seed,'b',P.name,Math.floor(n/3))), nz:rng(hash(seed,'nz',n)) };
+  const R=rng(hash(seed,'plate',P.name));
+  g.setTransform(sc,0,0,sc,0,0); g.imageSmoothingEnabled=true; g.filter='none'; g.globalAlpha=1; g.globalCompositeOperation='source-over';
+  g.fillStyle=COL.bg; g.fillRect(0,0,LW,LH);
+  P.fn(S,R);
+  g.setTransform(1,0,0,1,0,0);
+  if(target.width!==W||target.height!==H){ target.width=W; target.height=H; }
+  post(cv,target,S,S.post);
+  return S;
+}
+
+function contactSheet(n,cellW,seed,target,f0=0,f1=TOTAL()-1){
+  const cols=AR>=1?6:8, rows=Math.ceil(n/cols), cellH=Math.round(cellW/AR), lab=26, gap=8;
+  const SW=cols*(cellW+gap)+gap, SH=rows*(cellH+lab+gap)+gap;
+  target.width=SW; target.height=SH; const g=target.getContext('2d');
+  g.fillStyle='#181818'; g.fillRect(0,0,SW,SH);
+  const tmp=cvs('cell',cellW*2,Math.round(cellW*2/AR));     // render at 2x, downscale: post-processing stays honest
+  for(let i=0;i<n;i++){
+    const f=n>1?Math.round(f0+i*(f1-f0)/(n-1)):f0;
+    const S=renderFrame(f,cellW*2,seed,tmp);
+    const x=gap+(i%cols)*(cellW+gap), y=gap+Math.floor(i/cols)*(cellH+lab+gap);
+    g.drawImage(tmp,x,y,cellW,cellH);
+    g.fillStyle='#ddd'; g.font='12px Menlo, monospace'; g.textBaseline='top';
+    g.fillText(`f=${f}  ${S.name}  t=${S.t.toFixed(2)}  ${(f/FPS).toFixed(1)}s`,x+2,y+cellH+6);
+  }
+}
+
+/* =====================================================================
+   PLATES = BUILDERS. Lengths are multiples of BEAT. Replace the demo with your film.
+   Each builder continues the line and the camera where the previous one left them.
+   ===================================================================== */
+
+/* demo 1: the dot breathes, the line draws a ring and a square in it. Also the decor of the whole film. */
+plate('spark',{len:2*BAR, build(W,{pen,b}){
+  // decor: dots on jittered grids of five scales. A grid shows only while its dots stand at least ~40 px apart on
+  // screen, so every zoom level finds a calm density. Dots keep a screen size (/k) and are dimmed by the spotlight.
+  W.sets.push({f0:0,f1:Infinity,draw(g,f,k,cam){ const v=viewRect(cam,k,2);
+    for(let n=0;n<5;n++){ const s=3*Math.pow(4,n), vis=smooth(span(s*k,36,90)); if(vis<=0) continue;
+      for(let i=Math.floor(v.x0/s);i<=Math.ceil(v.x1/s);i++) for(let j=Math.floor(v.y0/s);j<=Math.ceil(v.y1/s);j++){
+        const r=rng(hash(W.seed,'dust',n,i,j)), x=(i+r.r(-0.4,0.4))*s, y=(j+r.r(-0.4,0.4))*s, sz=r.r(1,2.2), ph=r.f()*TAU;
+        const a=0.55*vis*spotlight(W,f,cam,k,x,y)*(0.75+0.25*Math.sin(f*0.1+ph)); if(a<0.01) continue;
+        g.fillStyle=rgb(DUST,a); g.beginPath(); g.arc(x,y,sz/k,0,TAU); g.fill(); } } }});
+  W.spot=f=>lerp(0.6,3,ease.sio(span(f,W.at('reach',1),W.at('reach',6))));   // intimate at first, opens with the world
+  W.headGlow=f=>f<b(1)?0.75+0.25*Math.sin(TAU*f/BEAT-Math.PI/2):1;             // the dot breathes before the first stroke
+  const ring=[], square=[[8,0],[0,8],[-8,0],[0,-8]];
+  for(let i=1;i<=64;i++){ const a=-Math.PI/2+i/64*TAU; ring.push([8*Math.cos(a),8*Math.sin(a)]); }
+  pen.hold(b(1)); pen.bez([2,-2],[-3,-6],[0,-8],b(1.6),'sio',{keep:0.12});   // the line leaves the dot
+  pen.along(ring,b(4),'sio',{keep:0.85});
+  W.glows.push({f0:b(4)-4,f1:b(5.5),draw(lg,f,k){ const a=Math.min(span(f,b(4)-4,b(4)),1-span(f,b(4),b(5.5)));
+    glowDot(lg,0,-8,(22+40*span(f,b(4),b(5.5)))/k,LINE,0.5*a); }});             // a flash where the ring closes
+  pen.hold(b(4.4)); pen.along(square,b(7.4),'sio',{keep:0.6});
+  camKey(W,0,0,0,34); camKey(W,b(8),0,0,50);
+  title(W,b(2),b(7.2),'FRAMEWRIGHT','one continuous world');
+}});
+
+/* demo 2: a lid covers the square, the line travels on through three growing loops, the camera opens up */
+plate('reach',{len:2*BAR, build(W,{pen,b}){
+  // occlusion: the decor draws the lid; cover() erases the old line beneath it; strokes drawn later stay on top
+  const lid=f=>ease.sio(span(f,b(0),b(1.5))), first=W.path.X.length-1;
+  W.sets.push({f0:b(0),f1:Infinity,draw(g,f){ const u=lid(f); if(u<=0) return; g.fillStyle=rgb(LID,0.95*u); g.beginPath(); g.arc(0,0,7.6,0,TAU); g.fill(); }});
+  cover(W,b(0),Infinity,(lg,f)=>{ lg.fillStyle=`rgba(0,0,0,${0.8*lid(f)})`; lg.beginPath(); lg.arc(0,0,7.6,0,TAU); lg.fill(); });
+  dim(W,0,first,b(3),b(5),0.35);                           // the first drawing recedes as the line moves on
+  // cursive loops: enter at the bottom heading right, go round counter-clockwise, leave the same way
+  const loop=(cx,r)=>{ const p=[]; for(let i=1;i<=56;i++){ const a=Math.PI/2-i/56*TAU; p.push([cx+r*Math.cos(a),-r+r*Math.sin(a)]); } return p; };
+  pen.hold(b(0.3));
+  for(const [cx,r,ta,tb] of [[90,10,1.5,2.6],[190,18,3.5,4.8],[340,30,5.8,7.3]]){
+    const px=pen.x, py=pen.y;
+    pen.bez([lerp(px,cx,0.35),py-10],[lerp(px,cx,0.7),-10],[cx,0],b(ta),'sio',{keep:0.3});
+    pen.along(loop(cx,r),b(tb),'sio',{keep:0.7});
+    W.glows.push({f0:b(tb)-3,f1:b(tb)+24,draw(lg,f,k){ const a=Math.min(span(f,b(tb)-3,b(tb)),1-span(f,b(tb),b(tb)+24));
+      glowDot(lg,cx,0,(20+34*span(f,b(tb),b(tb)+24))/k,LINE,0.5*a); }});
+  }
+  pen.hold(b(8));
+  camKey(W,b(0),0,0,50); camKey(W,b(2.4),64,-8,110,{w:0.5}); camKey(W,b(5),185,-16,230,{w:0.5}); camKey(W,b(8),180,-24,330,{w:0.25});
+  title(W,b(1),b(7),'REPLACE THE BUILDERS','with the scenes of your film');
+}});
+
+/* =====================================================================
+   BOOT
+   ===================================================================== */
+const MAIN=document.getElementById('c');
+window.RISO={
+  fps:FPS,
+  get total(){ return TOTAL(); },
+  get plates(){ return PLATES.map(p=>({name:p.name,len:p.len})); },
+  frame(n,width,seed){ renderFrame(n,width??WIDTH,seed??SEED,MAIN); return MAIN.toDataURL('image/png'); },
+  contact(n,cellW,f0,f1){ contactSheet(n||24,cellW||480,SEED,MAIN,f0??0,f1??TOTAL()-1); return MAIN.toDataURL('image/png'); },
+  // per-frame curves for the soundtrack (scripts/export-curves.mjs -> curves.json, read by audio.mjs):
+  // sp head speed on screen (logical px per frame), pan head position on screen (-1 left .. 1 right), z camera.
+  // Add fields the sound needs (a character on screen, a second head) the same way.
+  curves(seed){ const W=getWorld(seed??SEED), frames=[];
+    for(let f=0;f<W.total;f++){ const cam=camAt(W,f), k=SHORT/cam.z, a=headAt(W.path,f), p=headAt(W.path,f-1);
+      const sp=a&&p&&a.started?Math.hypot(a.x-p.x,a.y-p.y)*k:0;
+      frames.push({f,sp:+sp.toFixed(2),pan:a?+clamp((a.x-cam.x)*k/(LW/2),-1,1).toFixed(3):0,z:+cam.z.toFixed(1)}); }
+    return {fps:FPS,bpm:BPM,total:W.total,start:W.start,frames}; },
+  // size of the world, printed by look.mjs info
+  stats(seed){ const W=getWorld(seed??SEED); return {points:W.path.X.length,chunks:W.path.chunks.length,camKeys:W.cam.length,
+    titles:W.titles.length,glows:W.glows.length,sets:W.sets.length,covers:W.covers.length,dims:W.dims.length,extraLines:W.more.length}; }
+};
+window.addEventListener('load',()=>{
+  if(Q.has('grid')){ contactSheet(+Q.get('grid')||24,+Q.get('cw')||480,SEED,MAIN,+(Q.get('from')||0),Q.has('to')?+Q.get('to'):TOTAL()-1); window.__ready=true; }
+  else if(Q.has('f')){ renderFrame(+Q.get('f')||0,WIDTH,SEED,MAIN); window.__ready=true; }
+  else { let f=+(Q.get('from')||0), last=0;
+    const tick=(ts)=>{ if(ts-last>=1000/FPS){ last=ts; renderFrame(f++,Math.min(WIDTH,960),SEED,MAIN); } requestAnimationFrame(tick); };
+    requestAnimationFrame(tick); window.__ready=true; }
+});
+</script>
+</body>
+</html>

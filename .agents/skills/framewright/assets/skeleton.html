@@ -15,8 +15,9 @@ canvas{display:block;margin:0 auto;max-width:100vw;max-height:100vh}
 /* =====================================================================
    framewright skeleton. One file, one canvas. A frame is a pure function of
    (frame number, seed, width). No images, no video, no base64, no CDN.
-   URL knobs:  ?f=140  ?s=12  ?w=1920  ?grid=24  ?cw=480  ?ar=16:9
+   URL knobs:  ?f=140  ?s=12  ?w=1920  ?grid=24  ?cw=480  ?from=60&to=180  ?ar=16:9
    Without knobs the page plays a live preview (capped at 960 px wide).
+   A film without cuts (one line, one camera journey) starts from assets/world.html instead.
    Layout of this file: params -> generators -> math -> helpers -> data -> engine -> plates -> boot.
    Keep every helper ABOVE the plates block. Never put helpers between plates.
    ===================================================================== */
@@ -34,6 +35,7 @@ const CX = LW/2, CY = LH/2;
 const SEED  = +(Q.get('s') || 7);
 const WIDTH = +(Q.get('w') || 1920);
 const SAFE  = 0.08;                                        // keep important content this far from edges (fraction of LH)
+const TITLE_Y = AR < 1 ? 0.70 : 0.80;                      // baseline of lower titles; in 9:16 the bottom 20 % belongs to platform UI
 
 /* ---------- generators ---------- */
 function hash(){ // any arguments -> 32-bit seed
@@ -155,7 +157,7 @@ const PLATES=[];
    S.b generator re-seeded every 3 frames (live line), S.nz generator per frame (noise),
    R generator stable for the whole plate (composition). Seeds derive from the plate NAME, so
    inserting a plate never changes its neighbours. */
-function plate(name,opts,fn){ PLATES.push(Object.assign({name,fn},opts)); }
+function plate(name,opts,fn){ if(PLATES.some(p=>p.name===name)) console.warn(`duplicate plate name: ${name}`); PLATES.push(Object.assign({name,fn},opts)); }
 function TOTAL(){ return PLATES.reduce((a,p)=>a+p.len,0); }
 function locate(n){ let acc=0; for(let i=0;i<PLATES.length;i++){ if(n<acc+PLATES[i].len) return {idx:i,local:n-acc}; acc+=PLATES[i].len; } const i=PLATES.length-1; return {idx:i,local:PLATES[i].len-1}; }
 
@@ -182,15 +184,14 @@ function renderFrame(n,width,seed,target){
   return S;
 }
 
-function contactSheet(n,cellW,seed,target){
+function contactSheet(n,cellW,seed,target,f0=0,f1=TOTAL()-1){   // f0..f1: a sheet of one section
   const cols=AR>=1?6:8, rows=Math.ceil(n/cols), cellH=Math.round(cellW/AR), lab=26, gap=8;
   const SW=cols*(cellW+gap)+gap, SH=rows*(cellH+lab+gap)+gap;
   target.width=SW; target.height=SH; const g=target.getContext('2d');
   g.fillStyle='#181818'; g.fillRect(0,0,SW,SH);
   const tmp=cvs('cell',cellW*2,Math.round(cellW*2/AR));     // render at 2x, downscale: post-processing stays honest
-  const total=TOTAL();
   for(let i=0;i<n;i++){
-    const f=Math.round(i*(total-1)/(n-1));
+    const f=n>1?Math.round(f0+i*(f1-f0)/(n-1)):f0;
     const S=renderFrame(f,cellW*2,seed,tmp);
     const x=gap+(i%cols)*(cellW+gap), y=gap+Math.floor(i/cols)*(cellH+lab+gap);
     g.drawImage(tmp,x,y,cellW,cellH);
@@ -225,10 +226,14 @@ window.RISO={
   get total(){ return TOTAL(); },
   get plates(){ return PLATES.map(p=>({name:p.name,len:p.len})); },
   frame(n,width,seed){ renderFrame(n,width??WIDTH,seed??SEED,MAIN); return MAIN.toDataURL('image/png'); },
-  contact(n,cellW){ contactSheet(n||24,cellW||480,SEED,MAIN); return MAIN.toDataURL('image/png'); }
+  contact(n,cellW,f0,f1){ contactSheet(n||24,cellW||480,SEED,MAIN,f0??0,f1??TOTAL()-1); return MAIN.toDataURL('image/png'); },
+  // plate starts for the soundtrack (scripts/export-curves.mjs -> curves.json -> audio.mjs builds its T table from it).
+  // frames stays empty here; fill it per frame when the sound should follow something on screen (references/audio.md, section 7).
+  curves(){ const start={}; let acc=0; for(const p of PLATES){ start[p.name]=acc; acc+=p.len; }
+    return {fps:FPS,bpm:BPM,total:acc,start,frames:[]}; }
 };
 window.addEventListener('load',()=>{
-  if(Q.has('grid')){ contactSheet(+Q.get('grid')||24,+Q.get('cw')||480,SEED,MAIN); window.__ready=true; }
+  if(Q.has('grid')){ contactSheet(+Q.get('grid')||24,+Q.get('cw')||480,SEED,MAIN,+(Q.get('from')||0),Q.has('to')?+Q.get('to'):TOTAL()-1); window.__ready=true; }
   else if(Q.has('f')){ renderFrame(+Q.get('f')||0,WIDTH,SEED,MAIN); window.__ready=true; }
   else { let f=+(Q.get('from')||0), last=0;
     const tick=(ts)=>{ if(ts-last>=1000/FPS){ last=ts; renderFrame(f++,Math.min(WIDTH,960),SEED,MAIN); } requestAnimationFrame(tick); };

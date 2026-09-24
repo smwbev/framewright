@@ -6,7 +6,7 @@
 |---|---|---|
 | muddy, dirty colour | a dense light fill under a dark ink or layer | light colours as accents and thin underlays, never full fills under dark |
 | thin lines crumble | line thinner than the halftone or pixel cell | thicker hero outlines, or a finer cell on that plate only |
-| a plate looks empty | scale, not missing detail | one large object instead of twenty small ones |
+| a plate looks empty | scale, not missing detail | one large object instead of twenty small ones, or a closer camera; never more detail |
 | a cell does not read in 1.5 s | the plate is a process, not a picture | redesign the plate around one still image |
 | text clipped | no width fitting | `fit` in `pixText`, measure before placing |
 | lines touch each other | line height ignored a sub-line | compute line height in units of `cell` including sub-lines |
@@ -19,6 +19,24 @@
 | a frame is black with no error | the plate threw before drawing | read the `PAGE ERROR` line from `look.mjs`; the exception is there |
 | neighbouring plates changed after inserting one | generators seeded by plate index | seed by plate name (the skeleton does) |
 | the vertical cut looks wrong | landscape composition scaled | compose the vertical variant: check its own sheet with `AR=9:16` |
+| a title hides under the platform's buttons in 9:16 | title placed for 16:9 | baseline at `TITLE_Y`: 70 % of the height in vertical |
+| two titles smudge into one | both on screen at once in the same place | end one before the next begins, even when both fade |
+
+## World films
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| the camera jumps at a plate boundary | the next plate's first key is far from where the camera was | start the plate with a key where the previous one ended, or let a key 12+ frames later take over |
+| a zoom rushes at first and then crawls | `z` interpolated linearly | interpolate `log z` (`camRaw` in `world.html` does) |
+| the camera lands late on an event | Gaussian smoothing settles up to 12 frames after a key | move the key 12 frames earlier or hold two equal keys |
+| lines get fat or vanish during a zoom | widths in world units | widths in screen px divided by `k` |
+| a stroke appears all at once | the stroke arrives before the pen's time: the previous one overran | read the pen warning, retime the previous plate's strokes |
+| the head creeps during a pause | a pause without a point at its end | `pen.hold` writes one (the skeleton does) |
+| frames slow down as the line grows | the line redrawn point by point every frame | `Path2D` chunks and a binary search for the head (`world.html`) |
+| a hidden part of the line ends with a stray piece | range split inside a chunk | `cover()` and `dim()` add chunk breaks; do not pass raw ranges |
+| a close-up looks busy | decor as bright as the subject | spotlight: `W.spot` about 0.6 in intimate scenes |
+| bloom washes the picture out | light over a light ground, too much bloom | keep the ground dark under light, lower the bloom alpha from 0.85 |
+| decor crowds the frame after a zoom out | one grid for every scale | several grids ×4 apart, each shown while its dots are 40+ px apart on screen |
 
 ## Portrait
 
@@ -32,6 +50,9 @@ See `photo.md`, section 3.
 | a scene is silent | no bed | add hum, hiss or a pad at 0.02–0.06 under everything |
 | the track is one solid block | too many layers at high amplitude | drop beds to 0.03, drums to 0.5, watch the pre-normalization peak (aim 0.7) |
 | clicks at cue boundaries | zero attack or release | `att` 4 ms, `rel` 20 ms minimum |
+| sound follows an old version of the picture | stale `curves.json` | `node scripts/export-curves.mjs curves.json` before `audio.mjs` (`make.sh` and `npm run audio` do; the template warns) |
+| a voice that follows the picture zippers | controls jump every frame | smooth amplitude and pan over 20–30 ms (`follow` does) |
+| the follow voice drones at one level | `sMax` too low, the curve saturates | raise `sMax` to the speed of a brisk stroke; read `sp` in `curves.json` |
 
 ## Render and files
 

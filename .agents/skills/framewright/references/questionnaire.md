@@ -64,6 +64,11 @@ Three concepts, always, before code. One per angle:
 | Metaphor | What situation is this, and which familiar visual system means that situation? | test card = waiting, blueprint = plan, terminal = process, weather map = forecast, scoreboard = competition, boarding pass = departure |
 | Genre parody | Which format would report this event with a straight face? | news bulletin, teletext, arcade attract mode, airline safety card, nature documentary, infomercial, 90s TV ad, product keynote |
 
+Any angle can be told as one take: when the logline is a journey or a growth (a line that
+draws a life, a flight from a detail out to a landscape), the concept can be one continuous
+world instead of cut scenes (`world.md`). Say so in the concept; it is built and changed
+differently.
+
 For each concept produce:
 
 - **Name**: two words the user can say back.

@@ -14,5 +14,8 @@ The main event sits on a bar boundary. The last bar belongs to the ending.
 
 Total bars: ___  ·  Total seconds: ___  ·  Main event at: ___ s (bar ___)
 
+World film (one take, no cuts): one line on the world's layout from the smallest scale to the largest,
+and the camera per plate: where it looks and how much it sees (`z`) at the plate's start and end.
+
 Checks: every plate readable as a still in 1.5 s; two neighbouring cells of one plate never look identical;
 text fits with margins; nothing important in the outer 8 % of the frame.
