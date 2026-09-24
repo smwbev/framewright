@@ -21,6 +21,31 @@
 
 ---
 
+## One world instead of separate scenes
+
+<p align="center">
+  <img src="examples/world-demo/preview.webp" alt="The world demo: a line draws a ring and a square, a lid covers the square, the line travels on through three growing loops while the camera pulls back" width="400" />
+  <img src="examples/honeybee/preview.webp" alt="One line: a golden line draws a bee's life from an egg in a cell to the comb, the hive, a meadow and a last flight at sunset" width="400" />
+</p>
+
+<p align="center"><sub>Left: <a href="examples/world-demo">the world demo</a> that <code>init.sh --world</code> scaffolds, 8 seconds. Right: <a href="examples/honeybee">One line</a>, the life of a worker bee in one take, 56 seconds, 1680 frames, one 57 KB HTML file, shown at 5× speed; titles in Russian. Full MP4 with sound: <a href="https://github.com/smwbev/framewright/releases/download/v1.2.0/honeybee-sample.mp4">honeybee-sample.mp4</a> (13 MB).</sub></p>
+
+<p align="center">
+  <img src="examples/honeybee/contact-sheet.jpg" alt="Contact sheet of One line: egg, larva, cap, comb, first flight, meadow, dance, last flight, drop of honey" width="960" />
+</p>
+
+When the story is one journey told without cuts, the scenes stop being separate pictures. Each
+becomes a builder that adds its part to one world: a line that remembers when each of its points
+was drawn, camera keys with even zooms and smooth following, light with bloom, titles. Every frame
+is drawn from that world and is still a pure function of (frame, seed, width). The soundtrack reads
+the line's speed and position on screen from the film. Start one with `init.sh --world`; the method
+is in `references/world.md`.
+
+## Scenes joined by cuts
+
+The other mode: separate scenes, each a picture of its own, cut on the beat. Here, a television
+that has nothing to show.
+
 <p align="center">
   <img src="examples/ris-tv/preview.webp" alt="Preview of the RIS TV example: TV powers on, test card, countdown, teletext, oscilloscope" width="720" />
 </p>
@@ -38,10 +63,8 @@ concepts (a literal one, a metaphor, a genre parody), agrees a storyboard on a b
 then builds the video scene by scene, looking at rendered frames after every step. It renders
 the frames, synthesizes a soundtrack to the locked scene lengths, assembles the MP4 and
 checks the file. Photos become posterized polygons, never pixels. Every step has a visual
-checkpoint and a rule against guessing.
-
-For a film without cuts it builds one continuous world instead of separate scenes (see
-[below](#one-world-instead-of-separate-scenes)).
+checkpoint and a rule against guessing. Both modes above come out of the same workflow: a
+concept told in one take is built as one world.
 
 | Step | What the agent does | What you see |
 |---|---|---|
@@ -60,29 +83,38 @@ and demands identical pixels, scans the source for clocks and `Math.random`, and
 loads any file. The MP4 is encoded with the BT.709 matrix and tagged, so players show the colours
 that were reviewed.
 
-## One world instead of separate scenes
-
-When the story is one journey told without cuts, the scenes stop being separate pictures. Each
-becomes a builder that adds its part to one world: a line that remembers when each of its points
-was drawn, camera keys with even zooms and smooth following, light with bloom, titles. Every frame
-is drawn from that world and is still a pure function of (frame, seed, width). The soundtrack reads
-the line's speed and position on screen from the film. Start one with `init.sh --world`; the method
-is in `references/world.md`.
-
-<p align="center">
-  <img src="examples/world-demo/preview.webp" alt="The world demo: a line draws a ring and a square, a lid covers the square, the line travels on through three growing loops while the camera pulls back" width="400" />
-  <img src="examples/honeybee/preview.webp" alt="One line: a golden line draws a bee's life from an egg in a cell to the comb, the hive, a meadow and a last flight at sunset" width="400" />
-</p>
-
-<p align="center"><sub>Left: <a href="examples/world-demo">the world demo</a> that <code>init.sh --world</code> scaffolds, 8 seconds. Right: <a href="examples/honeybee">One line</a>, the life of a worker bee in one take, 56 seconds, 1680 frames, one 57 KB HTML file, shown at 5× speed; titles in Russian. Full MP4 with sound: <a href="https://github.com/smwbev/framewright/releases/download/v1.2.0/honeybee-sample.mp4">honeybee-sample.mp4</a> (13 MB).</sub></p>
-
-<p align="center">
-  <img src="examples/honeybee/contact-sheet.jpg" alt="Contact sheet of One line: egg, larva, cap, comb, first flight, meadow, dance, last flight, drop of honey" width="960" />
-</p>
-
 ## Quick start
 
-### Option 1: clone and run your agent inside
+### Install the skill (recommended)
+
+```bash
+npx skills add smwbev/framewright -g
+```
+
+`-g` installs it for your user, so every project sees it; without `-g` it goes into the current
+project only. The installer asks which agents to install it for (Claude Code, Codex, Gemini CLI,
+Cursor, OpenCode and others); `-a claude-code` picks one without asking.
+
+Then open your agent in an empty folder and describe the video, for example: *"a 20-second
+deadpan video asking Anna when the release ships, retro TV style"*. The agent loads the skill,
+starts with the brief and sets up the project itself.
+
+### Update the skill
+
+```bash
+npx skills update framewright -g     # installed with -g
+npx skills update framewright        # installed into a project: run it inside that project
+npx skills list -g                   # what is installed, where, and for which agents
+```
+
+The installer remembers where the skill came from and fetches the latest version from GitHub; the
+changes are listed on the [releases](https://github.com/smwbev/framewright/releases) page. Videos
+you already started keep their own copy of `scripts/`, so an update never changes them behind
+your back. To give an older project the new scripts, copy the `scripts/` folder of the installed
+skill (`npx skills list -g` shows where it is) over the project's `scripts/`, and leave its
+`index.html` alone.
+
+### Or work inside a clone
 
 ```bash
 git clone https://github.com/smwbev/framewright my-video
@@ -91,21 +123,20 @@ npm install
 claude        # or: codex, gemini, cursor, opencode ...
 ```
 
-Then say what you want, for example: *"a 20-second deadpan video asking Anna when the
-release ships, retro TV style"*. The agent picks up `AGENTS.md`, loads the skill and starts
-with the brief.
+The agent picks up `AGENTS.md` and the skill from the clone. Update it with `git pull`.
 
-### Option 2: add the skill to your own project
+### Other ways
 
-```bash
-npx skills add smwbev/framewright          # installs into the agents you choose
-gemini skills install https://github.com/smwbev/framewright --path .agents/skills/framewright --consent   # Gemini CLI
-```
-
-Or copy `.agents/skills/framewright` into your project. Claude Code reads
-`.claude/skills/`, so add a symlink or copy there.
+Gemini CLI has its own installer:
+`gemini skills install https://github.com/smwbev/framewright --path .agents/skills/framewright --consent`.
+It has no update command: run `gemini skills uninstall framewright` and install again. You can
+also copy `.agents/skills/framewright` into a project by hand (Claude Code reads `.claude/skills/`)
+and copy it again to update.
 
 ## Supported agents
+
+`npx skills add` puts the skill where each agent looks for it. Inside a clone of this repository
+they find it like this:
 
 | Agent | How it picks the skill up |
 |---|---|
@@ -124,7 +155,8 @@ frontmatter, `references/` loaded on demand, `scripts/` and `assets/`.
 
 Node 20+, npm, ffmpeg with libx264, Chrome via Puppeteer (installed by `npm install`).
 Python 3 with numpy, scipy and Pillow only if a photo will be traced. macOS and Linux;
-Windows through WSL.
+Windows through WSL. The agent checks all of this itself before it starts and asks before
+installing anything. In a clone you can run the check by hand:
 
 ```bash
 bash .agents/skills/framewright/scripts/doctor.sh            # report
@@ -150,20 +182,6 @@ examples/world-demo/           a preview of the demo that init.sh --world scaffo
 
 ## Examples
 
-`examples/ris-tv` is a complete 40-second video in the retro TV style, made of scenes joined by
-cuts: the set powers on,
-snow and NO SIGNAL, a test card with a day counter, a countdown that breaks, two teletext
-pages with the question, an oscilloscope tracing a paperclip, a portrait that locks in, and
-the tube switching off. Render a contact sheet of it:
-
-```bash
-npm install
-npm run example        # writes shots/example-sheet.png
-```
-
-Or render the whole thing: `HTML=examples/ris-tv/index.html node .agents/skills/framewright/scripts/render.mjs frames 7 1920 5`,
-then `cd examples/ris-tv && node audio.mjs ../../track.wav`, then `bash .agents/skills/framewright/scripts/build.sh out.mp4`.
-
 `examples/honeybee` is "One line", a complete 56-second film in one take: a golden line draws a
 worker bee's life from an egg in a cell to the comb, the hive, a meadow, the waggle dance and a
 last flight at sunset, and its last point falls back into the comb as a drop of honey. It is the
@@ -172,6 +190,19 @@ writes its contact sheet; the full render is described in its README.
 
 `examples/world-demo` shows the eight-second demo that `init.sh --world` scaffolds as a starting
 point for a film of your own.
+
+`examples/ris-tv` is a complete 40-second video in the retro TV style, made of scenes joined by
+cuts: the set powers on, snow and NO SIGNAL, a test card with a day counter, a countdown that
+breaks, two teletext pages with the question, an oscilloscope tracing a paperclip, a portrait
+that locks in, and the tube switching off. Render a contact sheet of it:
+
+```bash
+npm install
+npm run example        # writes shots/example-sheet.png
+```
+
+Or render the whole thing: `HTML=examples/ris-tv/index.html node .agents/skills/framewright/scripts/render.mjs frames 7 1920 5`,
+then `cd examples/ris-tv && node audio.mjs ../../track.wav`, then `bash .agents/skills/framewright/scripts/build.sh out.mp4`.
 
 ## Making videos by hand
 
