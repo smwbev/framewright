@@ -1,11 +1,11 @@
 ---
 name: framewright
-description: Build a short procedural video (10–60 s) as one self-contained HTML file where every frame is a pure function of (frame number, seed, width), then render it to MP4 with headless Chrome and ffmpeg, with a synthesized soundtrack and optional photo-to-vector portraits. Use when the user asks for an animated clip, motion graphics, an intro or outro, a video greeting, shout-out or question addressed to someone, a teaser, kinetic typography, a retro TV, risograph, terminal or blueprint style animation, a one-take film where a single line or camera journey carries the story, or wants "a video from code" without stock footage or video editors. Runs an interactive brief, proposes three concepts, storyboards to a beat grid, builds scene by scene with visual checks, verifies the final MP4.
+description: Build a short procedural video (10–60 s) as one self-contained HTML file where every frame is a pure function of (frame number, seed, width), then render it to MP4 with headless Chrome and ffmpeg, with a synthesized soundtrack and optional photo-to-vector portraits. Use when the user asks for an animated clip, motion graphics, an intro or outro, a video greeting, shout-out or question addressed to someone, a teaser, kinetic typography, a retro TV, risograph, terminal or blueprint style animation, a one-take film where a single line or camera journey carries the story, a drawing that becomes a living painting, a landscape with nature sounds, or wants "a video from code" without stock footage or video editors. Runs an interactive brief, proposes three concepts, storyboards to a beat grid, builds scene by scene with visual checks, verifies the final MP4.
 license: MIT
 compatibility: Node 20+, Chrome via Puppeteer, ffmpeg with libx264. Python 3 with numpy, scipy and Pillow only for photo tracing. macOS and Linux; Windows through WSL.
 metadata:
   author: smwbev
-  version: "1.3.0"
+  version: "1.4.0"
   homepage: https://github.com/smwbev/framewright
 ---
 
@@ -103,6 +103,9 @@ one, and ask the user to pick. The method and worked examples are in
 `references/questionnaire.md`. A concept whose logline is one journey without cuts (a line that
 never lifts, a flight from a detail out to a landscape) is built as one continuous world
 (`references/world.md`); say so in its row, because it changes how scenes are built and changed.
+A concept that is one view drawn, painted and brought to life (a pencil drawing that becomes a
+living oil painting, styles 13–16) is built as a painting film (`references/painting.md`); say so
+in its row too: its plates are chapters of time over one painting, and the scene is the work.
 
 ## Step 3. Storyboard and scaffold
 
@@ -114,14 +117,17 @@ scene gives up a bar. Show the table and ask for a single go.
 Then scaffold:
 
 ```bash
-bash SKILL_DIR/scripts/init.sh           # index.html, scripts/, audio.mjs, storyboard.md, package.json
-bash SKILL_DIR/scripts/init.sh . --world # the same, but index.html is the one-world skeleton (no cuts)
-npm install                              # puppeteer (Chrome comes from the cache or is downloaded once)
+bash SKILL_DIR/scripts/init.sh              # index.html, scripts/, audio.mjs, storyboard.md, package.json
+bash SKILL_DIR/scripts/init.sh . --world    # the same, but index.html is the one-world skeleton (no cuts)
+bash SKILL_DIR/scripts/init.sh . --painting # the painting skeleton; audio.mjs and nature.mjs make nature sound
+npm install                                 # puppeteer (Chrome comes from the cache or is downloaded once)
 node scripts/look.mjs shot 0,30,60 1200 7
 ```
 
 Open the PNGs with your image viewing tool and look at them. The skeleton's demo plate must
-render before you touch it. Then replace the demo plate with your first scene.
+render before you touch it. Then replace the demo plate with your first scene. In a painting film
+frame 0 is blank paper: shoot `30,82,200` (the drawing, the colour arriving, the living painting)
+instead, and replace the demo's scene block while the painting kit stays as it is.
 
 ## Step 4. Scenes
 
@@ -145,6 +151,11 @@ Read `references/guide.md` once before the first scene. The essentials:
   append to one timeline: `b(x)` is beat x of the plate, the pen continues the line from where
   the previous plate left it, `camKey` moves one camera, `title` adds text. Read
   `references/world.md` before the first builder.
+- A painting film (`--painting`) draws one still painting in three media. Its plates all call
+  `drawPainting(S)`; the view lives in the `SCENE` object and its layers between
+  `/* ===== scene ===== */` and `/* ===== end scene ===== */`, and the painting kit above it stays
+  as it is. Read `references/painting.md` before the first layer. Review the drawing alone first,
+  then the reveal, then life (`references/painting.md`, section 13).
 
 Per scene: write it, shoot the first frame, one in the middle, one five frames before the
 end, look, fix, look again. After every two or three scenes:
@@ -211,14 +222,18 @@ a placeholder.
 
 ## Step 7. Sound
 
-`scripts/export-curves.mjs` writes `curves.json` from the page: plate starts, the cues, and in a
-world film the speed and screen position of the line's head for every frame. `audio.mjs` takes its
-timeline from it, so it never drifts from the picture (a page without `RISO.curves()` needs the
-starts from `look.mjs info` copied into `T` by hand). Write one block of events per plate using
-the cue map in `references/audio.md`; hits on something the picture marks take their time from
-the page's cues, `cue('name')` (`CUES`, or `W.cues` in a world film), not from beat numbers
-copied out of a plate; in a world film give the line or the character a voice that follows the
-curves (`follow()`, `references/audio.md`, section 7). Then:
+`scripts/export-curves.mjs` writes `curves.json` from the page: plate starts, the cues, and for
+every frame in a world film the speed and screen position of the line's head, in a painting film
+the revealed shares, life, `gust` and zoom. `audio.mjs` takes its timeline from it, so it never
+drifts from the picture (a page without `RISO.curves()` needs the starts from `look.mjs info`
+copied into `T` by hand). Write one block of events per plate using the cue map in
+`references/audio.md`; hits on something the picture marks take their time from the page's cues,
+`cue('name')` (`CUES`, or `W.cues` in a world film), not from beat numbers copied out of a plate;
+in a world film give the line or the character a voice that follows the curves (`follow()`,
+`references/audio.md`, section 7). A painting or a landscape gets nature ambience instead of
+beats: wind, water, rustle and birds from `nature.mjs`, timed to the cues and to the page's `gust`
+by the `audio.mjs` that `--painting` copies from `assets/audio-nature.mjs` (`references/audio.md`,
+section 8, Nature ambience). Then:
 
 ```bash
 node scripts/export-curves.mjs curves.json
@@ -236,7 +251,8 @@ Deliver `out.mp4` (1920×1080, H.264, AAC, ~0.7 MB per second on noisy styles) a
 to rebuild: `bash scripts/make.sh [photo.jpg] [seed] [width]`. Offer, do not impose:
 another seed (a different impression of the same plates), a vertical cut
 (`AR=9:16 node scripts/render.mjs frames-v 7 1080 5`, then check a sheet with `AR=9:16`; lower
-titles sit at 70 % of the height there, `TITLE_Y`, clear of the platform's buttons),
+titles sit at 70 % of the height there, `TITLE_Y`, clear of the platform's buttons; a painting film
+stretches its 16:9 scene and needs its own 9:16 layout, `references/painting.md`, section 11),
 a GIF for chats, a poster frame (`look.mjs shot <frame> 1920`), the HTML itself as a live
 preview. When the brief asks for the cover as the first frame, frame 0 must be a finished picture:
 no fade-in, the title already up, marks already drawn (`references/world.md`, section 7); shoot it
@@ -255,21 +271,27 @@ in time and the pen carries its end point over: reshoot the boundary frames
 
 - `references/questionnaire.md`: the brief, wording for both structured and plain-chat
   modes, the concept generator with worked examples.
-- `references/styles.md`: twelve visual systems with palettes, motion language, signature
+- `references/styles.md`: sixteen visual systems with palettes, motion language, signature
   objects, post-processing recipes and sound palettes.
 - `references/guide.md`: the engine, helpers, timing grid, review protocol, render and
   encoding numbers, file layout.
 - `references/world.md`: one continuous world for films without cuts: builders, the pen and
   its line, the keyed camera, the light layer, occlusion and dimming, spotlight, titles,
   review and changes, sound from the picture.
+- `references/painting.md`: painting films: the scene contract, marks, the pencil drawing,
+  reveals, life, water, the camera, caches, costs, review and sound.
 - `references/audio.md`: cue map, synthesis blocks, mastering, checks, voices that follow the
-  picture.
+  picture, nature ambience (section 8).
 - `references/photo.md`: photo to polygons, parameters, rendering and animation of portraits.
 - `references/troubleshooting.md`: symptoms, causes, fixes, including environment traps.
 - `assets/skeleton.html`: the starting file. `assets/world.html`: the starting file of a world
-  film. `assets/audio-template.mjs`: the sound toolkit. `scripts/export-curves.mjs`: plate
-  starts and per-frame curves for the sound.
+  film. `assets/painting.html`: the starting file of a painting film (the painting kit and a demo
+  scene). `assets/audio-template.mjs`: the sound toolkit. `assets/nature.mjs`: nature sound
+  blocks; `assets/audio-nature.mjs`: a soundtrack built on them. `scripts/export-curves.mjs`:
+  plate starts and per-frame curves for the sound.
 - `../../examples/ris-tv/` in the repository: a finished 40-second video with eight plates,
   sound and a portrait pipeline, to read as a worked example.
 - `../../examples/honeybee/` in the repository: a finished 56-second film in one take, the
   one-world method at full scale with sound driven by the line.
+- `../../examples/lake-dawn/` in the repository: a finished 15-second painting film, a mountain
+  lake at sunrise drawn in pencil, painted and brought to life, with nature sound.

@@ -3,12 +3,15 @@
 Read once before the first scene. Everything here is implemented in `assets/skeleton.html`
 and used at full scale in `examples/ris-tv/index.html`.
 
-There are two starting files. `assets/skeleton.html` is a film of separate plates joined by
+There are three starting files. `assets/skeleton.html` is a film of separate plates joined by
 cuts: each plate draws its own picture. `assets/world.html` is one continuous world: plates are
 builders that append a line, camera keys, titles and light events to one timeline, and one
 function draws any frame of it (`init.sh --world`, method in `references/world.md`). Choose the
 world for a journey or a growth told without cuts; choose plates for bulletins, parodies, lists
-and anything cut on the beat. Everything below holds for both.
+and anything cut on the beat. `assets/painting.html` is the plate engine with a painting kit: one
+still oil painting built from cached layers of brush marks, revealed through a pencil drawing of
+itself and brought to life; its plates are chapters of time (`init.sh --painting`, styles 13–16,
+method in `references/painting.md`). Everything below holds for all three.
 
 ## 1. The file
 
@@ -263,6 +266,7 @@ of the height (`TITLE_Y` does it when the aspect is vertical). One soundtrack se
 ```
 index.html        the video
 audio.mjs         the soundtrack
+nature.mjs        the nature sound blocks audio.mjs imports (init.sh --painting only)
 storyboard.md     the plan
 curves.json       plate starts and per-frame curves for the sound, written by export-curves, ignored by git
 scripts/          look, check, render, build, make, export-curves, inject, portrait, trace, doctor

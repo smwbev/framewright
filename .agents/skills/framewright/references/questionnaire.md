@@ -70,12 +70,18 @@ draws a life, a flight from a detail out to a landscape), the concept can be one
 world instead of cut scenes (`world.md`). Say so in the concept; it is built and changed
 differently.
 
+A view can also be a painting: a landscape that is drawn in pencil, painted over, then comes alive
+under a slow push-in (styles 13–16, `painting.md`). It fits a place, a memory, a season, a quiet
+thank-you, an idea becoming real. It is one view per film with room for one title; say so in the
+concept, because the scene takes most of the work.
+
 For each concept produce:
 
 - **Name**: two words the user can say back.
 - **Logline**: one sentence, present tense, what the viewer sees from first to last frame.
 - **Visual system**: a family from `styles.md` or a system of its own (a weather map, a boarding
-  pass, a line of light, a red pencil on a light table), a three-colour palette, the type.
+  pass, a line of light, a red pencil on a light table, a painting that comes alive), a three-colour
+  palette, the type.
 - **Key scenes**: three to five, in order, each one line, each readable as a still.
 - **Ending**: the final image and the last text on screen.
 - **Sound sketch**: three cues.

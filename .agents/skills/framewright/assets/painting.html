@@ -1,0 +1,905 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>framewright painting</title>
+<style>
+html,body{margin:0;height:100%;background:#000;overflow:hidden}
+canvas{display:block;margin:0 auto;max-width:100vw;max-height:100vh}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+/* =====================================================================
+   framewright painting film. One file, one canvas. A frame is a pure function of
+   (frame number, seed, width). No images, no video, no base64, no CDN.
+   A painting film is one picture told in three media without a cut: a pencil drawing appears on blank paper,
+   oil colour washes in over it and finishes, then the painting comes alive and the camera pushes in. The drawing
+   is computed from the painting, so the eye watches the medium change, not the composition. Method, recipes,
+   costs and review: references/painting.md. The demo scene is a lake at dawn, 12 s.
+   URL knobs:  ?f=140  ?s=12  ?w=1920  ?grid=24  ?cw=480  ?from=60&to=180  ?ar=16:9
+   Without knobs the page plays a live preview (capped at 960 px wide).
+   Layout of this file: params -> generators -> math -> helpers -> painting kit -> scene -> engine -> plates -> boot.
+   Write your picture in the scene block (SCENE); the painting kit stays as it is. Every plate calls drawPainting(S).
+   Keep every helper ABOVE the plates block. Never put helpers between plates.
+   ===================================================================== */
+
+/* ---------- parameters ---------- */
+const Q = new URLSearchParams(location.search);
+const FPS = 30, BPM = 120;
+const BEAT = Math.round(FPS * 60 / BPM), BAR = BEAT * 4;   // 120 BPM -> beat 15 frames, bar 60
+const SHORT = 1080;                                        // logical short side, all geometry lives here
+function parseAR(s){ const m=/^(\d+(?:\.\d+)?)[:x\/](\d+(?:\.\d+)?)$/.exec(s||''); return m ? (+m[1])/(+m[2]) : 16/9; }
+const AR = parseAR(Q.get('ar') || '16:9');
+const LW = AR >= 1 ? Math.round(SHORT*AR) : SHORT;         // logical width
+const LH = AR >= 1 ? SHORT : Math.round(SHORT/AR);         // logical height
+const CX = LW/2, CY = LH/2;
+const SEED  = +(Q.get('s') || 7);
+const WIDTH = +(Q.get('w') || 1920);
+const SAFE  = 0.08;                                        // keep important content this far from edges (fraction of LH)
+const TITLE_Y = AR < 1 ? 0.70 : 0.80;                      // baseline of lower titles; in 9:16 the bottom 20 % belongs to platform UI
+
+/* ---------- generators ---------- */
+function hash(){ // any arguments -> 32-bit seed
+  let h = 2166136261 >>> 0;
+  for (let k=0;k<arguments.length;k++){ const s=String(arguments[k])+'|';
+    for (let i=0;i<s.length;i++){ h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } }
+  h ^= h>>>13; h = Math.imul(h, 0x5bd1e995); h ^= h>>>15;
+  return h >>> 0;
+}
+function rng(seed){ // sfc32
+  let a=seed>>>0, b=0x9e3779b9, c=0x6a09e667, d=0xbb67ae85;
+  const f=()=>{ a>>>=0;b>>>=0;c>>>=0;d>>>=0; let t=(a+b)|0; a=b^(b>>>9); b=(c+(c<<3))|0; c=(c<<21)|(c>>>11); d=(d+1)|0; t=(t+d)|0; c=(c+t)|0; return (t>>>0)/4294967296; };
+  for(let i=0;i<12;i++) f();
+  return {
+    f, r:(lo,hi)=>lo+(hi-lo)*f(), i:(n)=>Math.floor(f()*n), pick:(arr)=>arr[Math.floor(f()*arr.length)],
+    sign:()=>f()<0.5?-1:1, chance:(p)=>f()<p,
+    g:()=>{ let u=0,v=0; while(u===0)u=f(); while(v===0)v=f(); return Math.sqrt(-2*Math.log(u))*Math.cos(2*Math.PI*v); }
+  };
+}
+
+/* ---------- math ---------- */
+const clamp=(v,a=0,b=1)=>v<a?a:v>b?b:v;
+const lerp=(a,b,t)=>a+(b-a)*t;
+const span=(f,a,b)=>clamp((f-a)/(b-a));                    // progress of f between a and b, 0..1
+const smooth=t=>{t=clamp(t);return t*t*(3-2*t)};
+const sstep=(a,b,x)=>smooth((x-a)/(b-a));                  // smoothstep from a to b (a > b runs downhill)
+const ease=Object.freeze({                                 // frozen, like COL: a plate that edits shared values breaks render order
+  out:t=>1-Math.pow(1-clamp(t),3), in:t=>Math.pow(clamp(t),3),
+  io:t=>{t=clamp(t);return t<.5?4*t*t*t:1-Math.pow(-2*t+2,3)/2},
+  back:t=>{const c=1.70158;t=clamp(t);return 1+(c+1)*Math.pow(t-1,3)+c*Math.pow(t-1,2)},
+  elastic:t=>{t=clamp(t);return t===0||t===1?t:Math.pow(2,-10*t)*Math.sin((t*10-0.75)*(2*Math.PI/3))+1}
+});
+const pad=(n,w=2)=>String(n).padStart(w,'0');
+const TAU=Math.PI*2, DEG=Math.PI/180;
+
+/* ---------- canvas pool ---------- */
+const POOL={};
+function cvs(name,w,h){ let c=POOL[name]; if(!c){ c=document.createElement('canvas'); c.getContext('2d',{willReadFrequently:true}); POOL[name]=c; } if(c.width!==w||c.height!==h){ c.width=w; c.height=h; } return c; }
+/* a pooled canvas keeps its context from frame to frame: wipe it before drawing, or a save() without restore(), a clip,
+   a shadow or a composite mode left by one frame leaks into the next and frames start to depend on render order */
+function wipe(g){ if(g.reset) g.reset(); else g.canvas.width=g.canvas.width; return g; }
+
+/* ---------- palette (a painting film: the paper and the pencil; the painting's colours live in the scene) ---------- */
+const COL=Object.freeze({ bg:'#F2EBDC', paper:'#F2EBDC', ink:'#30281D' });
+const FONT_MONO='Menlo, Monaco, "Courier New", monospace';
+const FONT_SANS='"Helvetica Neue", Helvetica, Arial, sans-serif';
+
+/* =====================================================================
+   HELPERS (all above the plates block)
+   ===================================================================== */
+
+/* ---- pixel text: system font -> threshold -> nearest-neighbour upscale. Gives bitmap/teletext/OSD look.
+   o: x,y, px (font size in glyph pixels, 14 is good), cell (logical units per glyph pixel),
+      align left|center|right, base top|middle|bottom, color, bg, pad, reveal 0..1, fit (max width), alpha ---- */
+const GLYPH={};
+function glyphs(str,o){
+  const px=o.px||14, font=`${o.weight||'bold'} ${px}px ${o.font||FONT_MONO}`, thr=(o.thr||0.5)*255;
+  const key=str+'~#~'+font+'~#~'+thr;
+  if(GLYPH[key]) return GLYPH[key];
+  const m=document.createElement('canvas'); let mg=m.getContext('2d'); mg.font=font;
+  const tw=Math.ceil(mg.measureText(str).width)+6, th=Math.ceil(px*1.7)+6;
+  m.width=tw; m.height=th; mg=m.getContext('2d'); mg.font=font; mg.fillStyle='#fff'; mg.textBaseline='alphabetic';
+  mg.fillText(str,3,Math.round(px*1.2));
+  const id=mg.getImageData(0,0,tw,th), d=id.data; let x0=tw,x1=-1,y0=th,y1=-1;
+  for(let y=0;y<th;y++)for(let x=0;x<tw;x++){ const i=(y*tw+x)*4; const on=d[i+3]>thr; d[i]=d[i+1]=d[i+2]=255; d[i+3]=on?255:0;
+    if(on){ if(x<x0)x0=x; if(x>x1)x1=x; if(y<y0)y0=y; if(y>y1)y1=y; } }
+  if(x1<0){x0=0;x1=0;y0=0;y1=0;}
+  mg.putImageData(id,0,0);
+  return GLYPH[key]={c:m,x0,y0,w:x1-x0+1,h:y1-y0+1};
+}
+function pixW(str,o){ return glyphs(str,o).w*(o.cell||6); }
+function pixText(g,str,o){
+  const G=glyphs(str,o); let cell=o.cell||6; if(o.fit) cell=Math.max(1,Math.min(cell,Math.floor(o.fit/G.w)));
+  const w=G.w*cell, h=G.h*cell;
+  let x=o.x, y=o.y;
+  if(o.align==='center') x-=w/2; else if(o.align==='right') x-=w;
+  if(o.base==='middle') y-=h/2; else if(o.base==='bottom') y-=h;
+  x=Math.round(x/cell)*cell; y=Math.round(y/cell)*cell;      // snap to the glyph grid, otherwise letters shimmer
+  if(o.bg){ const p=(o.pad??1)*cell; g.fillStyle=o.bg; g.fillRect(x-p,y-p,w+2*p,h+2*p); }
+  const rev=o.reveal??1; if(rev<=0) return {x,y,w,h};
+  const sw=Math.max(1,Math.round(G.w*rev));
+  const t=cvs('tint',G.w,G.h), tg=t.getContext('2d');
+  tg.clearRect(0,0,G.w,G.h); tg.drawImage(G.c,G.x0,G.y0,G.w,G.h,0,0,G.w,G.h);
+  tg.globalCompositeOperation='source-in'; tg.fillStyle=o.color||COL.ink; tg.fillRect(0,0,G.w,G.h); tg.globalCompositeOperation='source-over';
+  g.save(); g.imageSmoothingEnabled=false; if(o.alpha!=null) g.globalAlpha=o.alpha;
+  g.drawImage(t,0,0,sw,G.h,x,y,sw*cell,h);
+  g.restore();
+  return {x,y,w,h};
+}
+
+/* ---- vector text with the same alignment API, for large display type ---- */
+function vecText(g,str,o){
+  g.save(); g.font=`${o.weight||'bold'} ${o.size||120}px ${o.font||FONT_SANS}`; g.fillStyle=o.color||COL.ink;
+  g.textAlign=o.align||'left'; g.textBaseline=o.base||'alphabetic'; if(o.alpha!=null) g.globalAlpha=o.alpha;
+  g.fillText(str,o.x,o.y); g.restore();
+}
+
+/* ---- deterministic per-pixel finisher. Grain and vignette only; put your style's post-processing here
+   (halftone, scanlines, barrel, misregistration...). Runs on output pixels, ~50 ms per 1080p pass. ---- */
+function post(src,dst,S,o={}){
+  const W=src.width,H=src.height, sg=src.getContext('2d'), dg=wipe(dst.getContext('2d'));   // the target keeps nothing of the previous frame
+  const grain=(o.grain??0)*(S.grain??1), vig=o.vig??0;
+  if(!grain && !vig){ dg.drawImage(src,0,0); return; }
+  const id=sg.getImageData(0,0,W,H), d=id.data, cx=(W-1)/2, cy=(H-1)/2;
+  let z=hash(S.seed,'grain',S.f)|0;
+  for(let y=0;y<H;y++){ const ny=(y-cy)/cy;
+    for(let x=0;x<W;x++){ const i=(y*W+x)*4; const nx=(x-cx)/cx, r2=nx*nx+ny*ny;
+      z=(Math.imul(z,1664525)+1013904223)|0; const gn=((z>>>24)/255-0.5)*grain; const v=1-vig*Math.pow(r2*0.5,1.4);
+      d[i]=clamp(d[i]*v+gn,0,255); d[i+1]=clamp(d[i+1]*v+gn,0,255); d[i+2]=clamp(d[i+2]*v+gn,0,255); } }
+  dg.putImageData(id,0,0);
+}
+
+/* ---- generated data goes between markers so scripts can replace it (see scripts/inject.mjs) ---- */
+/*PORTRAIT_START*/
+const PORTRAIT={"w":1,"h":1,"levels":[]};
+/*PORTRAIT_END*/
+
+/* ===== painting kit ===== */
+/* A painting film shows one oil painting in three media without a cut: a pencil drawing computed from the painting
+   appears on blank paper, the painting washes in over it and finishes, then the painting comes alive under a slow
+   push-in. The painting is built once per (seed, width) from cached layers of brush marks; after that a frame is a few
+   blits, two 1/4-resolution masks and the marks that move. Method, recipes, costs and review: references/painting.md.
+   drawPainting(S) draws any frame of it; every plate calls it. This block knows nothing of the scene: regions,
+   colours and builders live in the object SCENE (scene block below), which provides
+     horizon        y of the horizon as a fraction of the height: depth() and persp() scale marks from it
+     tRef           the film time (s) handed to live() while the still is composed (at rest: tau 0, life 0)
+     layers         back to front: [{name, rect(), paint(g, R, K, parts), parts, drift, flow, alpha, clip, live}]
+                      rect() -> [x, y, w, h] in logical px: the cache's extent (only with paint)
+                      paint(g, R, K, parts): builds the cache once; R its generator, K the kit (K.L holds the layers
+                        built before this one, K.seed, K.W), parts the contexts of its parts
+                      parts [{rect(), drift(tau, life)}]: extra canvases painted in the same pass that move on their own
+                      drift, flow, alpha: how the cached layer moves when alive (drawLayer)
+                      clip: a polygon in logical px the layer is clipped to
+                      live(g, K, tau, life, t): marks drawn every frame, and once at rest into the still
+                    A layer without paint is live only.
+     prepare(K)     runs before any layer is painted: lists of live marks, sprites, shared fields
+   and optionally
+     life {ramp}, camera {cue, rate, ease, focus}, wind {f, swell, hi, noise, am, pm}   override LIFE key by key
+     pencil {v, blur, gain(x, y), o}      a per-region pencil gain (a 1/4-res field blurred by `blur` cells, cached
+                                          under version v) and o, overrides of PENCIL
+     reveal {v, blur, settle, sketch, colour, offset: {sketch(x, y), colour(x, y)}}   merged key by key into REVEAL
+                                          (colour.finish too, so {colour: {finish: {kmax: 0.15}}} keeps the rest);
+                                          offsets are frames added to a time field before its floor and ceiling, so
+                                          parts of the picture arrive earlier or later
+     curves(K, f, tau, life) -> {...}     extra per-frame fields for the sound
+   Cues it reads: wash (colour starts), finish (the global finish starts), step (a one-frame step of the colour),
+   done (paint complete: the still), alive (life ramps in) and the camera's cue (push). marks is the sound's: the
+   REVEAL defaults put the first ink on the paper there. The REVEAL time fields are in absolute frames, tuned for
+   marks f6, wash f60, finish f73, step f87, done f98, alive f105 (plates of 60 and 45 frames before the living one);
+   a film that moves these cues moves t0, lo and hi of SCENE.reveal.sketch and .colour with them.
+   Rules: geometry in logical units; randomness only from rng(hash(seed, name, ...)); every cache keyed by all its
+   inputs and never a pooled canvas; caches built from fixed inputs only; getImageData only while building. */
+const PAINT_V=1;                 // recipe version: part of every cache key and of every layer's seed (a new value repaints every mark)
+const OVER=1.14;                 // caches are built this much larger than the output: a push-in up to x1.14 never upsamples
+
+/* ---- colour: [r, g, b] arrays, 0..255 ---- */
+const hexc=h=>{ const n=parseInt(h.slice(1),16); return [(n>>16)&255,(n>>8)&255,n&255]; };
+const C=c=>typeof c==='string'?hexc(c):c;
+const mixc=(a,b,t)=>[a[0]+(b[0]-a[0])*t,a[1]+(b[1]-a[1])*t,a[2]+(b[2]-a[2])*t];
+const css=(c,a=1)=>{ const r=clamp(c[0],0,255)|0, g=clamp(c[1],0,255)|0, b=clamp(c[2],0,255)|0;
+  return a>=1?`rgb(${r},${g},${b})`:`rgba(${r},${g},${b},${Math.round(clamp(a)*1000)/1000})`; };
+function rgb2hsl(c){ const r=c[0]/255,g=c[1]/255,b=c[2]/255, mx=Math.max(r,g,b), mn=Math.min(r,g,b), l=(mx+mn)/2; let h=0,s=0;
+  if(mx!==mn){ const d=mx-mn; s=l>0.5?d/(2-mx-mn):d/(mx+mn); h=mx===r?(g-b)/d+(g<b?6:0):mx===g?(b-r)/d+2:(r-g)/d+4; h*=60; } return [h,s,l]; }
+function hsl2rgb(h,s,l){ h=((h%360)+360)%360; const c=(1-Math.abs(2*l-1))*s, x=c*(1-Math.abs((h/60)%2-1)), m=l-c/2; let r,g,b;
+  if(h<60){r=c;g=x;b=0;} else if(h<120){r=x;g=c;b=0;} else if(h<180){r=0;g=c;b=x;} else if(h<240){r=0;g=x;b=c;} else if(h<300){r=x;g=0;b=c;} else {r=c;g=0;b=x;}
+  return [(r+m)*255,(g+m)*255,(b+m)*255]; }
+const hsl=(c,dh=0,ds=0,dl=0)=>{ const q=rgb2hsl(C(c)); return hsl2rgb(q[0]+dh,clamp(q[1]+ds),clamp(q[2]+dl)); };
+const JIT=[4,0.06,0.05];                                   // per-dab jitter: hue deg, saturation, lightness
+const jit=(c,R,j=JIT)=>hsl(c,R.r(-j[0],j[0]),R.r(-j[1],j[1]),R.r(-j[2],j[2]));
+/* a colour ramp through [v, colour] stops */
+function ramp(st){ const S=st.map(([v,c])=>[v,C(c)]);
+  return v=>{ if(v<=S[0][0]) return S[0][1]; for(let i=1;i<S.length;i++) if(v<=S[i][0]){ const a=S[i-1], b=S[i]; return mixc(a[1],b[1],(v-a[0])/(b[0]-a[0])); } return S[S.length-1][1]; }; }
+/* pick from a palette by a noise value v in about -1..1 (clusters of the same colour where v is smooth) */
+const pickPal=(pal,v)=>pal[clamp(Math.floor((v*0.5+0.5)*pal.length),0,pal.length-1)];
+
+/* ---- value noise on a seeded 256x256 lattice table (a hash per lookup is 50x slower); range about -1..1 ---- */
+const NOISE=new Map();
+function noise(seed){ let n=NOISE.get(seed); if(n) return n;
+  const R=rng(seed), T=new Float32Array(65536); for(let i=0;i<65536;i++) T[i]=R.f()*2-1;
+  n=(x,y)=>{ const xf=Math.floor(x), yf=Math.floor(y), fx=x-xf, fy=y-yf, u=fx*fx*(3-2*fx), v=fy*fy*(3-2*fy);
+    const x0=xf&255, x1=(xf+1)&255, y0=(yf&255)<<8, y1=((yf+1)&255)<<8, a=T[y0|x0], b=T[y0|x1], c=T[y1|x0], d=T[y1|x1];
+    return a+(b-a)*u+(c-a)*v+(a-b-c+d)*u*v; };
+  n.fbm=(x,y,o=3)=>{ let s=0,a=1,t=0; for(let k=0;k<o;k++){ s+=a*n(x,y); t+=a; a*=0.5; x=x*2.03+17.1; y=y*2.03+31.7; } return s/t; };
+  NOISE.set(seed,n); return n; }
+
+/* ---- geometry: polygons and polylines in logical units ---- */
+const toL=pts=>pts.map(p=>[p[0]*LW,p[1]*LH]);
+function inPoly(P,x,y){ let o=false; for(let i=0,j=P.length-1;i<P.length;j=i++){ const xi=P[i][0], yi=P[i][1], xj=P[j][0], yj=P[j][1];
+  if(((yi>y)!==(yj>y))&&(x<(xj-xi)*(y-yi)/(yj-yi)+xi)) o=!o; } return o; }
+function segDist(px,py,ax,ay,bx,by){ const vx=bx-ax, vy=by-ay, u=clamp(((px-ax)*vx+(py-ay)*vy)/((vx*vx+vy*vy)||1)); return Math.hypot(px-ax-u*vx,py-ay-u*vy); }
+function lineDist(L,x,y,closed=false){ let d=1e9; const n=L.length, m=closed?n:n-1;
+  for(let i=0;i<m;i++){ const a=L[i], b=L[(i+1)%n], e=segDist(x,y,a[0],a[1],b[0],b[1]); if(e<d) d=e; } return d; }
+const sdPoly=(P,x,y)=>inPoly(P,x,y)?-lineDist(P,x,y,true):lineDist(P,x,y,true);
+function bbox(P){ let x0=1e9,y0=1e9,x1=-1e9,y1=-1e9; for(const p of P){ if(p[0]<x0)x0=p[0]; if(p[1]<y0)y0=p[1]; if(p[0]>x1)x1=p[0]; if(p[1]>y1)y1=p[1]; } return {x0,y0,x1,y1}; }
+/* y of a polyline sorted by x, at x (held flat past the ends); and its direction there in radians */
+function yOn(L,x){ if(x<=L[0][0]) return L[0][1]; for(let i=1;i<L.length;i++) if(x<=L[i][0]){ const a=L[i-1], b=L[i]; return lerp(a[1],b[1],(x-a[0])/((b[0]-a[0])||1)); } return L[L.length-1][1]; }
+function angOn(L,x){ let i=1; while(i<L.length-1&&x>L[i][0]) i++; const a=L[i-1], b=L[i]; return Math.atan2(b[1]-a[1],b[0]-a[0]); }
+/* Chaikin corner cutting: a smooth polyline through a few hand-placed points (ends kept) */
+function smoothLine(L,it=2){ let P=L; for(let k=0;k<it;k++){ const Q=[P[0]]; for(let i=0;i<P.length-1;i++){ const a=P[i], b=P[i+1];
+  Q.push([a[0]*0.75+b[0]*0.25,a[1]*0.75+b[1]*0.25],[a[0]*0.25+b[0]*0.75,a[1]*0.25+b[1]*0.75]); } Q.push(P[P.length-1]); P=Q; } return P; }
+function pathPoly(g,P,close=true){ g.beginPath(); g.moveTo(P[0][0],P[0][1]); for(let i=1;i<P.length;i++) g.lineTo(P[i][0],P[i][1]); if(close) g.closePath(); }
+/* resample a polyline by arc length: [{x, y, tx, ty (unit tangent), s (0..1)}] */
+function resample(L,step){ const d=[0]; for(let i=1;i<L.length;i++) d.push(d[i-1]+Math.hypot(L[i][0]-L[i-1][0],L[i][1]-L[i-1][1]));
+  const tot=d[d.length-1], n=Math.max(2,Math.ceil(tot/step)), out=[]; let j=1;
+  for(let k=0;k<=n;k++){ const s=k/n*tot; while(j<L.length-1&&d[j]<s) j++; const a=L[j-1], b=L[j], u=(s-d[j-1])/((d[j]-d[j-1])||1), l=Math.hypot(b[0]-a[0],b[1]-a[1])||1;
+    out.push({x:lerp(a[0],b[0],u),y:lerp(a[1],b[1],u),tx:(b[0]-a[0])/l,ty:(b[1]-a[1])/l,s:k/n}); }
+  return out; }
+const depth=y=>clamp((y/LH-SCENE.horizon)/(1-SCENE.horizon));   // 0 at the horizon, 1 at the bottom edge
+const persp=y=>0.4+0.8*depth(y);                                 // mark size (and later speed) factor with distance
+
+/* ---- cached layers: built once on their own canvas, never drawn into again, keyed by every input ----
+   parts (optional): rects of extra canvases built in the same pass with the same generator, so a layer's marks can be split
+   into pieces that move differently later (the sky's cloud marks drift, its base does not) and the still stays identical;
+   build receives their contexts as its 4th argument, and the canvas carries them as c.parts */
+const LAYERS=new Map();                                          // separate from POOL: pooled canvases are rewritten every frame
+function layer(name,deps,rect,build,parts=null){
+  const key=name+'|'+JSON.stringify(deps)+'|'+rect.map(v=>Math.round(v)).join(',')+(parts?'|'+parts.map(r=>r.map(v=>Math.round(v)).join(',')).join(';'):'');
+  let c=LAYERS.get(key); if(c) return c;
+  const s=deps.W/LW*deps.over, mk=r=>{ const k=document.createElement('canvas'); k.width=Math.max(1,Math.ceil(r[2]*s)); k.height=Math.max(1,Math.ceil(r[3]*s));
+    const g=k.getContext('2d',{willReadFrequently:true}); g.setTransform(s,0,0,s,-r[0]*s,-r[1]*s); g.lineCap='round'; g.lineJoin='round'; k.rect=r; k.s=s; return [k,g]; };
+  const [c0,g]=mk(rect), P=parts?parts.map(mk):null; c=c0;
+  build(g,rng(hash(deps.seed,name,deps.v)),s,P?P.map(p=>p[1]):null);
+  if(P) c.parts=P.map(p=>p[0]);
+  c.key=key; LAYERS.set(key,c); return c; }
+function blit(g,c,dx=0,dy=0){ g.drawImage(c,c.rect[0]+dx,c.rect[1]+dy,c.width/c.s,c.height/c.s); }
+/* a base coat: colour fn(x, y) sampled every `cell` px over a logical rect, smoothed by the upscale */
+function fieldFill(g,rect,fn,cell=8){ const w=Math.ceil(rect[2]/cell)+2, h=Math.ceil(rect[3]/cell)+2, c=document.createElement('canvas'); c.width=w; c.height=h;
+  const cg=c.getContext('2d'), id=cg.createImageData(w,h), d=id.data;
+  for(let j=0;j<h;j++) for(let i=0;i<w;i++){ const col=fn(rect[0]+(i-0.5)*cell,rect[1]+(j-0.5)*cell), k=(j*w+i)*4; d[k]=col[0]; d[k+1]=col[1]; d[k+2]=col[2]; d[k+3]=255; }
+  cg.putImageData(id,0,0); g.save(); g.imageSmoothingEnabled=true; g.imageSmoothingQuality='high'; g.drawImage(c,rect[0]-cell,rect[1]-cell,w*cell,h*cell); g.restore(); }
+
+/* a colour field given on a coarse grid (colours picked from a study): xs, ys normalised sample positions, rows[j][i] hex -> fn(x, y logical), bilinear */
+function gridField(xs,ys,rows){ const T=rows.map(r=>r.map(C));
+  const idx=(a,v)=>{ if(v<=a[0]) return [0,0]; for(let i=1;i<a.length;i++) if(v<=a[i]) return [i-1,(v-a[i-1])/(a[i]-a[i-1])]; return [a.length-2,1]; };
+  return (x,y)=>{ const [i,u]=idx(xs,x/LW), [j,v]=idx(ys,y/LH); return mixc(mixc(T[j][i],T[j][i+1],u),mixc(T[j+1][i],T[j+1][i+1],u),v); }; }
+/* scalar fields on a 1/4-resolution logical grid (cell 4 px): resolution-independent, cached by name and inputs */
+const FIELDS=new Map(), FCELL=4;
+function field(name,deps,build){ const key=name+'|'+JSON.stringify(deps); let F=FIELDS.get(key); if(F) return F;
+  const gw=Math.ceil(LW/FCELL)+1, gh=Math.ceil(LH/FCELL)+1; F={gw,gh,a:new Float32Array(gw*gh)}; build(F); FIELDS.set(key,F); return F; }
+function fAt(F,x,y,a=F.a){ const fx=clamp(x/FCELL,0,F.gw-1.001), fy=clamp(y/FCELL,0,F.gh-1.001), i=fx|0, j=fy|0, u=fx-i, v=fy-j, k=j*F.gw+i;
+  return a[k]*(1-u)*(1-v)+a[k+1]*u*(1-v)+a[k+F.gw]*(1-u)*v+a[k+F.gw+1]*u*v; }
+/* separable box blur of a Float32 grid, `passes` times (3 passes of radius r ~ a Gaussian of sigma sqrt(r(r+1))) */
+function blurField(F,r,passes=3){ const {gw,gh}=F, a=F.a, b=new Float32Array(a.length), k=1/(2*r+1);
+  for(let p=0;p<passes;p++){
+    for(let y=0;y<gh;y++){ const o=y*gw; let s=0; for(let x=-r;x<=r;x++) s+=a[o+clamp(x,0,gw-1)]; for(let x=0;x<gw;x++){ b[o+x]=s*k; s+=a[o+Math.min(gw-1,x+r+1)]-a[o+Math.max(0,x-r)]; } }
+    for(let x=0;x<gw;x++){ let s=0; for(let y=-r;y<=r;y++) s+=b[clamp(y,0,gh-1)*gw+x]; for(let y=0;y<gh;y++){ a[y*gw+x]=s*k; s+=b[Math.min(gh-1,y+r+1)*gw+x]-b[Math.max(0,y-r)*gw+x]; } } }
+  return F; }
+
+/* ---- marks ---- */
+const DX=new Float32Array(24), DY=new Float32Array(24), DW=new Float32Array(24), TAPER=[0.6,1,0.7];
+/* dab: a bent, tapered quad with rounded ends (a knife or brush plateau), filled with col jittered in HSL.
+   o.imp 0..1: impasto ridges, a lit edge +12 % lightness at alpha 0.34 x imp on the side facing the light (upper left)
+   and a dark edge -15 % at alpha 0.24 x imp on the other; o.ridgeP: share of dabs that get them; o.bend (fraction of
+   len), o.alpha, o.jit ([hue, sat, light] or 0), o.taper [start, middle, end], o.ridge (ridge width).
+   o.rag 0..1: ragged knife edges (12 outline samples, each half-width scaled by 1 +- rag/2).
+   o.br 0..1: bristle marks, 3-5 hairlines (0.7-1.8 px, at most 0.7 of the half-width) along the bent axis inside the
+   dab, lighter or darker by 6-12 % at alpha 0.35-0.55 (scaled by br); o.brP: share of dabs that get them (cost). Returns the colour it painted. */
+function dab(g,x,y,len,wid,ang,col,R,o={}){
+  const c=Math.cos(ang), s=Math.sin(ang), hl=len/2, bend=(o.bend??R.r(-0.15,0.15))*len, tp=o.taper||TAPER, rag=o.rag||0, N=rag?12:8;
+  const q=o.jit===0?C(col):jit(col,R,o.jit||JIT), a=o.alpha??1;
+  for(let k=0;k<=N;k++){ const u=k/N, t=u*2-1, off=bend*(1-t*t), rnd=Math.sqrt(Math.max(0,1-Math.pow(Math.abs(t),6)));
+    DX[k]=x+c*t*hl-s*off; DY[k]=y+s*t*hl+c*off; DW[k]=wid*0.5*(u<0.5?lerp(tp[0],tp[1],u*2):lerp(tp[1],tp[2],u*2-1))*rnd*(rag?1+rag*(R.f()-0.5):1); }
+  g.beginPath(); g.moveTo(DX[0]-s*DW[0],DY[0]+c*DW[0]);
+  for(let k=1;k<=N;k++) g.lineTo(DX[k]-s*DW[k],DY[k]+c*DW[k]);
+  for(let k=N;k>=0;k--) g.lineTo(DX[k]+s*DW[k],DY[k]-c*DW[k]);
+  g.closePath(); g.fillStyle=css(q,a); g.fill();
+  if(o.br&&(o.brP==null||R.f()<o.brP)){ const nb=3+R.i(3), M=N>>1, wm=DW[M]||wid*0.5;
+    for(let i=0;i<nb;i++){ const f=R.sign()*R.r(0.2,0.7), fr=R.r(0.6,0.95), u0=R.r(0,1-fr), u1=u0+fr, t0=u0*2-1, t1=u1*2-1, tm=(t0+t1)/2;
+      const P=t=>{ const off=bend*(1-t*t)+f*wm; return [x+c*t*hl-s*off,y+s*t*hl+c*off]; }, A=P(t0), B=P(t1), Mq=P(tm);
+      g.beginPath(); g.moveTo(A[0],A[1]); g.quadraticCurveTo(2*Mq[0]-(A[0]+B[0])/2,2*Mq[1]-(A[1]+B[1])/2,B[0],B[1]);
+      g.lineWidth=Math.min(R.r(0.7,1.8),wm*0.7); g.strokeStyle=css(hsl(q,R.r(-4,4),0,R.sign()*R.r(0.06,0.12)),R.r(0.35,0.55)*o.br*a); g.stroke(); } }
+  const imp=o.imp??0; if(imp<=0.01||(o.ridgeP!=null&&R.f()>=o.ridgeP)) return q;   // ridges cost 2 strokes (~10 us): o.ridgeP thins them
+  const sd=(0.6*s-0.8*c)>0?1:-1, lw=o.ridge??1.1;           // sd: which side of the dab faces the light
+  g.lineWidth=lw;
+  g.beginPath(); for(let k=1;k<N;k++){ const px=DX[k]-sd*s*DW[k]*0.8, py=DY[k]+sd*c*DW[k]*0.8; k>1?g.lineTo(px,py):g.moveTo(px,py); }
+  g.strokeStyle=css(hsl(q,0,0,0.12),0.34*imp*a); g.stroke();
+  g.beginPath(); for(let k=1;k<N;k++){ const px=DX[k]+sd*s*DW[k]*0.8, py=DY[k]-sd*c*DW[k]*0.8; k>1?g.lineTo(px,py):g.moveTo(px,py); }
+  g.strokeStyle=css(hsl(q,0,0,-0.15),0.24*imp*a); g.stroke();
+  return q; }
+/* blade: a grass blade, a tapered quadratic curve from its root; width w0 at the root to w0*o.tip at the tip; the tip
+   bends `bend` rad further than the root direction; o.lit: a thin lighter edge on the side facing the light */
+function blade(g,x,y,len,w0,ang,bend,col,o={}){
+  const ax=Math.cos(ang)*len*0.5, ay=Math.sin(ang)*len*0.5, ex=Math.cos(ang+bend)*len, ey=Math.sin(ang+bend)*len, N=6, tip=o.tip??0.22;
+  for(let k=0;k<=N;k++){ const t=k/N, u=1-t, bx=2*u*t*ax+t*t*ex, by=2*u*t*ay+t*t*ey;
+    let tx=2*u*ax+2*t*(ex-ax), ty=2*u*ay+2*t*(ey-ay); const l=Math.hypot(tx,ty)||1; tx/=l; ty/=l;
+    DX[k]=x+bx; DY[k]=y+by; DW[k]=w0*0.5*lerp(1,tip,Math.pow(t,0.8)); DX[k+12]=tx; DY[k+12]=ty; }
+  g.beginPath(); g.moveTo(DX[0]-DY[12]*DW[0],DY[0]+DX[12]*DW[0]);
+  for(let k=1;k<=N;k++) g.lineTo(DX[k]-DY[k+12]*DW[k],DY[k]+DX[k+12]*DW[k]);
+  for(let k=N;k>=0;k--) g.lineTo(DX[k]+DY[k+12]*DW[k],DY[k]-DX[k+12]*DW[k]);
+  g.closePath(); g.fillStyle=css(col,o.alpha??1); g.fill();
+  if(o.lit){ const sd=(0.6*DY[12]-0.8*DX[12])>0?1:-1; g.lineWidth=o.litW||1; g.beginPath();
+    for(let k=0;k<N;k++){ const px=DX[k]-sd*DY[k+12]*DW[k]*0.6, py=DY[k]+sd*DX[k+12]*DW[k]*0.6; k?g.lineTo(px,py):g.moveTo(px,py); }
+    g.strokeStyle=css(o.lit,o.litA??0.6); g.stroke(); } }
+/* limb: a tapered branch along a centreline; returns its samples {x, y, tx, ty, nx, ny, w} for shading and bark */
+function limbSamples(L,w0,w1,step=5,wobble=null){ const S=resample(L,step);
+  for(const p of S){ p.nx=-p.ty; p.ny=p.tx; p.w=lerp(w0,w1,p.s)*(wobble?1+wobble(p.s):1); } return S; }
+function fillLimb(g,S,col,k=1,off=0){ g.beginPath();
+  for(let i=0;i<S.length;i++){ const p=S[i], h=p.w*0.5*k; i?g.lineTo(p.x+p.nx*(h+off*p.w),p.y+p.ny*(h+off*p.w)):g.moveTo(p.x+p.nx*(h+off*p.w),p.y+p.ny*(h+off*p.w)); }
+  for(let i=S.length-1;i>=0;i--){ const p=S[i], h=p.w*0.5*k; g.lineTo(p.x-p.nx*(h-off*p.w),p.y-p.ny*(h-off*p.w)); }
+  g.closePath(); g.fillStyle=typeof col==='string'?col:css(col); g.fill(); }
+
+/* paint a region: a jittered grid of dabs at about `cover` x coverage inside its polygon; angle = flow + low-frequency
+   noise (+-angJit); colour = r.col(x, y, v, R) with v a cluster noise (clusters of r.cluster px); sizes x persp(y)
+   when r.persp; a share r.spill (0.2) is left unclipped so borders stay painterly; then r.accents: thin dark marks
+   (the pencil filter turns them into drawing), and r.lights */
+function paintRegion(g,R,r,seed){
+  const P=r.P||toL(r.poly), bb=bbox(P), nz=noise(hash(seed,r.name,'flow')), nc=noise(hash(seed,r.name,'col')), cl=r.cluster||100;
+  const L=r.len, Wd=r.wid, k=Math.sqrt(0.8/(r.cover||2)), inClip=[], free=[], spill=r.spill??0.2, flow=r.flow||0, aj=r.angJit??10;
+  if(r.base){ g.save(); pathPoly(g,P); g.clip(); if(typeof r.base==='function') fieldFill(g,[bb.x0,bb.y0,bb.x1-bb.x0,bb.y1-bb.y0],r.base,r.baseCell||10); else { g.fillStyle=r.base; g.fill(); } g.restore(); }
+  let y=bb.y0-2;
+  while(y<bb.y1+2){ const p=r.persp?persp(y):1, cy=(Wd[0]+Wd[1])*0.5*p*k, cx=(L[0]+L[1])*0.5*p*k; let x=bb.x0-R.f()*cx;
+    while(x<bb.x1+cx){ const px=x+R.r(-0.5,0.5)*cx, py=y+R.r(-0.5,0.5)*cy;
+      if(inPoly(P,px,py)){ const fl=typeof flow==='function'?flow(px,py):flow;
+        const d={x:px,y:py,len:R.r(L[0],L[1])*p,wid:R.r(Wd[0],Wd[1])*p,ang:(fl+nz(px/300,py/300)*aj+R.r(-aj,aj)*0.5)*DEG,
+                 col:r.col(px,py,nc.fbm(px/cl,py/cl,2),R)};
+        (R.f()<spill?free:inClip).push(d); }
+      x+=cx; }
+    y+=cy; }
+  const o={imp:r.imp??0.6, jit:r.jit, ridgeP:r.ridgeP??0.5, taper:r.taper, br:r.br, brP:r.brP, rag:r.rag};
+  const one=d=>{ if(r.bend!=null) o.bend=R.r(-r.bend,r.bend); dab(g,d.x,d.y,d.len,d.wid,d.ang,d.col,R,o); };   // r.bend: bend amplitude (default +-0.15)
+  g.save(); pathPoly(g,P); g.clip(); for(const d of inClip) one(d); g.restore();
+  for(const d of free) one(d);
+  const n=inClip.length+free.length;
+  g.save(); pathPoly(g,P); g.clip();
+  for(const ac of [r.accents,r.lights]) if(ac){ const m=Math.round(n*ac.share);
+    for(let i=0;i<m;i++){ const px=R.r(bb.x0,bb.x1), py=R.r(bb.y0,bb.y1); if(!inPoly(P,px,py)) continue; const p=r.persp?persp(py):1, fl=typeof flow==='function'?flow(px,py):flow;
+      const base=r.col(px,py,nc.fbm(px/cl,py/cl,2),R), col=ac.col?C(typeof ac.col==='function'?ac.col(px,py,R):ac.col):hsl(base,0,ac.ds||0,ac.dl);
+      dab(g,px,py,R.r(ac.len[0],ac.len[1])*p,R.r(ac.wid[0],ac.wid[1])*p,(fl+R.r(-aj,aj))*DEG,col,R,{imp:0,jit:ac.jit||[3,0.04,0.03],alpha:ac.alpha??1}); } }
+  g.restore(); return n; }
+
+/* ---- the kit: every cache of one (seed, width), and the painting composed from it ---- */
+const KITS=new Map();
+function kit(seed,W){
+  const key=[seed,W,AR,OVER,PAINT_V].join('|'); let K=KITS.get(key); if(K) return K;
+  const deps={seed,W,ar:+AR.toFixed(5),over:OVER,v:PAINT_V};
+  K={seed,W,deps,L:{}};
+  if(SCENE.prepare) SCENE.prepare(K);                      // shared fields the builders read (noise, distance to shore, sprites)
+  for(const Ly of SCENE.layers) if(Ly.paint) K.L[Ly.name]=layer(Ly.name,deps,Ly.rect(),(g,R,s,P)=>Ly.paint(g,R,K,P),Ly.parts?Ly.parts.map(p=>p.rect()):null);
+  if(SCENE.after) SCENE.after(K);                          // parts and sprites cut from the built layers (a character in pieces)
+  K.still=layer('still',deps,[0,0,LW,LH],g=>composeLive(g,K,0,0,SCENE.tRef));
+  KITS.set(key,K); return K; }
+/* the living painting: tau = the life clock (s), life = the amplitude L, t = the film time (s; the wind reads it). K.still is
+   exactly this at (0, 0, tRef). A layer record may give drift(tau, life) -> [dx, dy] (a rigid shift), flow(tau, life) -> an
+   affine [a, b, c, d, e, f] in logical px (a drift that grows with depth is a shear) or a list of pieces [[y0, y1, affine],
+   ...] (a piecewise-linear drift profile: each piece is clipped to its band of logical y, band edges on whole device rows so
+   the pieces tile without a seam; keep the pieces continuous at the edges), alpha(tau, life), parts [{drift}] and
+   live(g, K, tau, life, t). At tau = 0 every one of them is the identity, so the still and the first living frame agree. */
+function drawLayer(g,Ly,c,tau,life){
+  const a=Ly.alpha&&tau>0?Ly.alpha(tau,life):1;
+  if(a>0){ if(a<1) g.globalAlpha=a;
+    if(Ly.flow&&tau>0){ const M=Ly.flow(tau,life);
+      if(typeof M[0]==='number'){ g.save(); g.transform(M[0],M[1],M[2],M[3],M[4],M[5]); blit(g,c); g.restore(); }
+      else { const T=g.getTransform(), H=g.canvas.height, W=g.canvas.width;
+        for(const [y0,y1,A,x0,x1] of M){ const r0=Math.max(0,Math.round(T.d*y0+T.f)), r1=Math.min(H,Math.round(T.d*y1+T.f)); if(r1<=r0) continue;   // a piece: rows y0..y1 (and columns x0..x1 if given), each its own affine map
+          const c0=x0==null?0:Math.max(0,Math.round(T.a*x0+T.e)), c1=x1==null?W:Math.min(W,Math.round(T.a*x1+T.e)); if(c1<=c0) continue;
+          g.save(); g.setTransform(1,0,0,1,0,0); g.beginPath(); g.rect(c0,r0,c1-c0,r1-r0); g.clip(); g.setTransform(T); g.transform(A[0],A[1],A[2],A[3],A[4],A[5]); blit(g,c); g.restore(); } } }
+    else { const d=Ly.drift&&tau>0?Ly.drift(tau,life):null; blit(g,c,d?d[0]:0,d?d[1]:0); }
+    if(a<1) g.globalAlpha=1; }
+  if(c.parts) c.parts.forEach((p,i)=>{ const d=Ly.parts[i].drift&&tau>0?Ly.parts[i].drift(tau,life):null; blit(g,p,d?d[0]:0,d?d[1]:0); }); }
+function composeLive(g,K,tau,life,t){
+  for(const Ly of SCENE.layers){
+    const c=K.L[Ly.name];
+    if(Ly.clip&&Ly.live){   /* many live marks under one clip path (surf, a field of grass): clipping every mark costs ~35 % more
+      than drawing them over an opaque copy of the frame and clipping that copy once (the same pixels: source-over is associative) */
+      const cv=g.canvas, T=cvs('clipLive',cv.width,cv.height), tg=wipe(T.getContext('2d')), M=g.getTransform(), bb=bbox(Ly.clip);
+      const r0=clamp(Math.floor(M.d*bb.y0+M.f)-1,0,cv.height), r1=clamp(Math.ceil(M.d*bb.y1+M.f)+1,0,cv.height), hh=r1-r0;   // only the rows the clip spans
+      if(hh<=0) continue;
+      tg.drawImage(cv,0,r0,cv.width,hh,0,r0,cv.width,hh);
+      tg.setTransform(M); tg.lineCap='round'; tg.lineJoin='round';
+      if(c) drawLayer(tg,Ly,c,tau,life);
+      Ly.live(tg,K,tau,life,t);
+      g.save(); pathPoly(g,Ly.clip); g.clip(); g.setTransform(1,0,0,1,0,0); g.drawImage(T,0,r0,cv.width,hh,0,r0,cv.width,hh); g.restore(); continue; }
+    if(Ly.clip){ g.save(); pathPoly(g,Ly.clip); g.clip(); }
+    if(c) drawLayer(g,Ly,c,tau,life);
+    if(Ly.live) Ly.live(g,K,tau,life,t);
+    if(Ly.clip) g.restore(); } }
+
+/* ---- life and camera ----
+   From the `alive` cue the life amplitude L ramps 0 -> 1 as 1 - (1 - x)^4, x = (d + 1) / ramp, d frames since the cue
+   (ramp 8: L 0.41 on the cue frame, 0.85 two frames later, 1 seven frames later): life shows at once and then settles,
+   where a smoothstep would read as a slow fade-in. The life clock tau (s) is the integral of L, so every speed ramps in
+   with L; before the cue L = 0 and nothing moves. Between the `done` and `alive` cues the still (one image) fades into the
+   same painting drawn as its living layers at rest (resampled one by one): the two differ by a few levels at texture
+   edges, which a fade over still frames hides, so life starts at full strength on its cue with no step. The camera is a
+   push-in about `focus` (fractions of the frame) from its cue: z = exp(rate * tc), tc = d^2 / (2 E) during the ease-in
+   (E = ease frames), then E/2 + (d - E), in frames / FPS; rate 0.01359 reaches x1.136 about 9.8 s after the cue, so the
+   end zoom stays under OVER. Every layer is drawn from its OVER-size cache under that transform (and so are the drawing
+   and the reveal masks), so the push-in never resamples a finished frame. The wind, gust(t, seed), is one signal for the
+   picture and the sound, about -2..2: a carrier of f Hz whose amplitude (am: [period s, depth]) and phase (pm: [period s,
+   radians]) wander, so it gusts instead of ticking, plus a swell and a ripple ([Hz, amplitude]) and smooth noise
+   ([period s, amplitude]). SCENE.life / camera / wind override LIFE key by key. */
+const LIFE=Object.freeze({ ramp:8, camera:{cue:'push', rate:0.01359, ease:27, focus:[0.5,0.5]}, wind:{f:1.05, swell:[0.45,0.35], hi:[1.6,0.25], noise:[0.22,0.8], am:[1.8,0.5], pm:[1.4,3.0]} });
+const lifeRamp=()=>(SCENE.life&&SCENE.life.ramp)||LIFE.ramp;
+function lifeAt(f){ const d=f-cue('alive'); if(d<0) return 0; const x=Math.min(1,(d+1)/lifeRamp()); return 1-Math.pow(1-x,4); }
+function lifeClock(f){ const D=lifeRamp(), d=f-cue('alive'); if(d<0) return 0; const u=(d+1)/D; return (u<1?D*(u+(Math.pow(1-u,5)-1)/5):0.8*D+d+1-D)/FPS; }
+function camAt(f){ const C=Object.assign({},LIFE.camera,SCENE.camera||{}), fx=C.focus[0]*LW, fy=C.focus[1]*LH, d=f-cue(C.cue), E=C.ease;
+  if(d<=0) return {z:1,fx,fy}; return {z:Math.exp(C.rate*(d<E?d*d/(2*E):E/2+d-E)/FPS),fx,fy}; }
+function camSet(g,sc,cam){ const z=cam.z; g.setTransform(sc*z,0,0,sc*z,sc*cam.fx*(1-z),sc*cam.fy*(1-z)); }
+const GUSTS=new Map();
+function gust(t,seed){ let G=GUSTS.get(seed);
+  if(!G){ const w=Object.assign({},LIFE.wind,SCENE.wind||{}), R=rng(hash(seed,'gust')); G={w,a:R.r(0,TAU),b:R.r(0,TAU),c:R.r(0,TAU),n:noise(hash(seed,'gustn'))}; GUSTS.set(seed,G); }
+  const w=G.w, am=w.am?1+w.am[1]*G.n(t/w.am[0],3.7):1, pm=w.pm?w.pm[1]*G.n(t/w.pm[0],9.1):0;   // the carrier's amplitude and phase wander (a gust, not a metronome)
+  return am*Math.sin(TAU*w.f*t+pm+G.a)+w.swell[1]*Math.sin(TAU*w.swell[0]*t+G.b)+w.hi[1]*Math.sin(TAU*w.hi[0]*t+G.c)+w.noise[1]*G.n(t/w.noise[0],0.5); }
+/* a plain dab for marks drawn every frame: the dab() outline (8 samples, no rag, no bristles) with a ready fill style and
+   optional ready ridge styles (lit, dark); no generator, no colour maths, so a mark looks the same on every frame */
+const FT=[], FR=[]; for(let k=0;k<=8;k++){ const t=k/4-1; FT.push(t); FR.push(Math.sqrt(Math.max(0,1-Math.pow(Math.abs(t),6)))); }   // dabFast's fixed samples
+function dabFast(g,x,y,len,wid,ang,bend,tp,fill,lit,dark){
+  const c=Math.cos(ang), s=Math.sin(ang), hl=len/2, bd=bend*len, w2=wid*0.5, a0=tp[0], a1=tp[1], a2=tp[2];
+  for(let k=0;k<=8;k++){ const t=FT[k], off=bd*(1-t*t), u=k/8;
+    DX[k]=x+c*t*hl-s*off; DY[k]=y+s*t*hl+c*off; DW[k]=w2*(u<0.5?a0+(a1-a0)*u*2:a1+(a2-a1)*(u*2-1))*FR[k]; }
+  g.beginPath(); g.moveTo(DX[0]-s*DW[0],DY[0]+c*DW[0]);
+  for(let k=1;k<=8;k++) g.lineTo(DX[k]-s*DW[k],DY[k]+c*DW[k]);
+  for(let k=8;k>=0;k--) g.lineTo(DX[k]+s*DW[k],DY[k]-c*DW[k]);
+  g.closePath(); g.fillStyle=fill; g.fill();
+  if(!lit) return; const sd=(0.6*s-0.8*c)>0?1:-1; g.lineWidth=1.1;
+  g.beginPath(); for(let k=1;k<8;k++){ const px=DX[k]-sd*s*DW[k]*0.8, py=DY[k]+sd*c*DW[k]*0.8; k>1?g.lineTo(px,py):g.moveTo(px,py); } g.strokeStyle=lit; g.stroke();
+  g.beginPath(); for(let k=1;k<8;k++){ const px=DX[k]+sd*s*DW[k]*0.8, py=DY[k]-sd*c*DW[k]*0.8; k>1?g.lineTo(px,py):g.moveTo(px,py); } g.strokeStyle=dark; g.stroke(); }
+/* ---- marks carried by a moving phase field (surf, drifting foam) ----
+   A generation of marks is sampled once at its birth time n*T by the scene on a jittered screen grid (cached: a function of
+   the seed and n only) and carried along the field so that each mark keeps its phase value (the scene's Newton steps along
+   the gradient of its 1/4-res phase field). A mark shows for one period T, starting at a staggered offset o (0..1 of T)
+   after its birth, with fades of F periods at both ends: at any time the marks of three generations add up to one full set,
+   the pattern moves with the field, and no mark pops. gens() lists [n, age in periods] of the generations alive at tau. */
+function gens(tau,T){ const n=Math.floor(tau/T+1e-9), a=tau/T-n; return [[n,a],[n-1,a+1],[n-2,a+2]]; }
+function stagger(o,a,F){ const h=F/2; return sstep(o-h,o+h,a)*(1-sstep(o+1-h,o+1+h,a)); }
+/* ---- the drawing: a pencil filter of the painting (a colour dodge of the luma by its inverted, blurred copy) ----
+   The dodge of luma Y by its blurred inverse is the ratio D = Y / blur(Y): 1 on flat paint, < 1 in a mark darker than
+   its surroundings, > 1 on a highlight. Marks: v = D(sigma)^gamma * D(fine)^g * D(fine1)^g (sigma 8: the mark's body,
+   2: its edges as crisp lines, 1: the ridges and bristle texture as grain). Ink = (1 - v) * gain(x, y) where v < 1, so
+   the gaps between marks stay at paper; where v > 1 a highlight lifts above the paper by lift[0] * (v - 1), at most
+   lift[1] (the dodge's bright specks). Tone: a grained shade (1 - L^tone[0]) * tone[1] * gain on the share grain[0]
+   of the pixels a paper-tooth grain catches (blurred white noise, cells grain[1] x grain[2] logical px, soft edge grain[3]
+   sd), so darker paint reads as a grainy pencil wash with paper specks, never as a uniform grey veil. Then a linear ramp
+   ink -> paper, plus the paper's fibre (+-fibre levels). The defaults are tuned so a drawing of a painted landscape
+   shows paper between strokes, crisp lines at mark edges and a grainy shade in dark paint, in water, foliage and grass
+   alike. It draws marks, not contrast: even, same-size dabs give a grey fog, so a region needs thin dark accents to draw
+   well (paintRegion's r.accents). sigma, grain cells in logical px. */
+const PENCIL=Object.freeze({ sigma:8, gamma:1.8, fine:[2,1.2], fine1:[1,0.8], lift:[0.35,0.05], tone:[0.05,1.8], grain:[0.6,2,1.2,0.6],
+  ink:'#30281D', paper:'#F2EBDC', fibre:1.5 });
+/* 3 passes of a separable running-sum box blur of radius r on a w x h Float32 image (a ~ Gaussian of sigma sqrt(r(r+1))),
+   edges clamped. The vertical pass keeps one running row of column sums, so both passes walk memory in order */
+function boxBlur3(a,w,h,r,tmp,passes=3){ const k=1/(2*r+1), acc=new Float32Array(w);
+  for(let p=0;p<passes;p++){
+    for(let y=0;y<h;y++){ const o=y*w, e=o+w-1; let s=a[o]*(r+1); for(let x=1;x<=r;x++) s+=a[Math.min(e,o+x)];
+      let x=0; for(;x<=r&&x<w;x++){ tmp[o+x]=s*k; s+=a[Math.min(e,o+x+r+1)]-a[o]; }
+      for(;x<w-r-1;x++){ tmp[o+x]=s*k; s+=a[o+x+r+1]-a[o+x-r]; }
+      for(;x<w;x++){ tmp[o+x]=s*k; s+=a[e]-a[o+Math.max(0,x-r)]; } }
+    for(let x=0;x<w;x++) acc[x]=tmp[x]*(r+1);
+    for(let y=1;y<=r;y++){ const o=Math.min(h-1,y)*w; for(let x=0;x<w;x++) acc[x]+=tmp[o+x]; }
+    for(let y=0;y<h;y++){ const o=y*w, oa=Math.min(h-1,y+r+1)*w, os=Math.max(0,y-r)*w;
+      for(let x=0;x<w;x++){ a[o+x]=acc[x]*k; acc[x]+=tmp[oa+x]-tmp[os+x]; } } } }
+const boxR=sig=>Math.max(1,Math.round((Math.sqrt(1+4*sig*sig)-1)/2));   // box radius whose 3 passes match sigma
+const boxFit=sig=>sig<1.6?[1,Math.max(1,Math.round(1.5*sig*sig))]:[boxR(sig),3];   // [radius, passes]: small sigmas take 1-3 passes of radius 1
+/* paper fibre: +-amp levels of faint mottling, fibres 15-45 px (two crossed stretched noises), a 1/4-res field */
+function fibreField(seed,amp){ return field('fibre',{seed,ar:+AR.toFixed(5),v:PAINT_V,amp},F=>{
+  const n1=noise(hash(seed,'fibre',1)), n2=noise(hash(seed,'fibre',2)), n3=noise(hash(seed,'fibre',3)), a=F.a; let s=0,s2=0;
+  for(let j=0;j<F.gh;j++) for(let i=0;i<F.gw;i++){ const x=i*FCELL, y=j*FCELL;
+    const v=0.55*n1(x/26+0.3*n3(x/90,y/90),y/8)+0.35*n2(x/9,y/24+0.3*n3(y/90,x/90))+0.25*n3(x/14,y/14); a[j*F.gw+i]=v; s+=v; s2+=v*v; }
+  const m=s/a.length, sd=Math.sqrt(Math.max(1e-9,s2/a.length-m*m)); for(let k=0;k<a.length;k++) a[k]=clamp((a[k]-m)/sd*amp/2.2,-amp,amp); }); }
+/* the paper at 1/4 resolution (drawn scaled; bilinear upscaling keeps the +-1.5-level mottling smooth) */
+function paperOf(K){ if(K.paper) return K.paper;
+  const F=fibreField(K.seed,PENCIL.fibre), c=document.createElement('canvas'); c.width=F.gw; c.height=F.gh;
+  const cg=c.getContext('2d'), id=cg.createImageData(F.gw,F.gh), d=id.data, P=C(PENCIL.paper);
+  for(let k=0;k<F.a.length;k++){ const e=F.a[k]; d[4*k]=P[0]+e+0.5; d[4*k+1]=P[1]+e+0.5; d[4*k+2]=P[2]+e+0.5; d[4*k+3]=255; }
+  cg.putImageData(id,0,0); return (K.paper=c); }
+function drawField(g,c){ g.save(); g.imageSmoothingEnabled=true; g.drawImage(c,-FCELL/2,-FCELL/2,c.width*FCELL,c.height*FCELL); g.restore(); }
+/* pencilOf(K, src, o): a cached drawing of the cached painting `src` (same rect and scale). o.gain = a 1/4-res field
+   (its key in o.gainKey), o.* overrides PENCIL. All pixel work happens here, once per (seed, width) */
+function pencilOf(K,src,o={}){
+  const P=Object.assign({},PENCIL,o), gain=o.gain||null, fib=P.fibre?fibreField(K.seed,P.fibre):null;
+  const deps=Object.assign({},K.deps,{src:src.key,sigma:P.sigma,gamma:P.gamma,fine:P.fine,fine1:P.fine1,lift:P.lift,tone:P.tone,grain:P.grain,ink:P.ink,paper:P.paper,fibre:P.fibre,gain:o.gainKey||null});
+  return layer('pencil',deps,src.rect,(g,R,s)=>{
+    const w=g.canvas.width, h=g.canvas.height, n=w*h, sd=src.getContext('2d').getImageData(0,0,w,h).data;
+    const Y=new Float32Array(n), A=new Float32Array(n), T=new Float32Array(n), dg=[P.fine,P.fine1].filter(Boolean).map(f=>[new Float32Array(n),f]);
+    for(let i=0,j=0;i<n;i++,j+=4){ const y=0.299*sd[j]+0.587*sd[j+1]+0.114*sd[j+2]; Y[i]=y; A[i]=255-y; }
+    for(const [B,f] of dg){ B.set(A); const [r,ps]=boxFit(f[0]*s); boxBlur3(B,w,h,r,T,ps); }
+    boxBlur3(A,w,h,boxR(P.sigma*s),T);
+    const lut=gm=>{ const L=new Float32Array(2049); for(let q=0;q<=2048;q++) L[q]=Math.pow(q/1024,gm); return L; };   // D in [0, 2] by 1/1024
+    const LD=lut(P.gamma), LF=dg.map(([,f])=>lut(f[1])), LT=new Float32Array(1025);
+    for(let q=0;q<=1024;q++) LT[q]=P.tone?(1-Math.pow(q/1024,P.tone[0]))*P.tone[1]:0;   // tone by luma, quarter levels
+    /* paper tooth: a 1021 x 509 px tile of white noise, box-blurred (wrapping) to cells of grain[1] x grain[2] logical px,
+       thresholded to the share grain[0] with a soft edge of grain[3] sd; tiled over the drawing (the repeat is invisible
+       in a grain this fine and costs one read per pixel) */
+    const TW=1021, TH=509; let M=null, th=0, k2=0; if(P.tone&&P.grain){ const [cov,cx,cy,soft]=P.grain;
+      M=new Float32Array(TW*TH); const t2=new Float32Array(TW*TH), rx=Math.max(0,Math.round(cx*s/2)), ry=Math.max(0,Math.round(cy*s/2));
+      let z=hash(K.seed,'tooth')|0; for(let k=0;k<M.length;k++){ z=(z+0x6D2B79F5)|0; let t=Math.imul(z^(z>>>15),1|z); t^=t+Math.imul(t^(t>>>7),61|t); M[k]=((t^(t>>>14))>>>0)/4294967296-0.5; }   // mulberry32
+      for(let j=0;j<TH;j++){ const r=j*TW; for(let i=0;i<TW;i++){ let a=0; for(let d=-rx;d<=rx;d++){ let ii=i+d; if(ii<0) ii+=TW; else if(ii>=TW) ii-=TW; a+=M[r+ii]; } t2[r+i]=a/(2*rx+1); } }
+      for(let j=0;j<TH;j++){ const r=j*TW; for(let i=0;i<TW;i++){ let a=0; for(let d=-ry;d<=ry;d++){ let jj=j+d; if(jj<0) jj+=TH; else if(jj>=TH) jj-=TH; a+=t2[jj*TW+i]; } M[r+i]=a/(2*ry+1); } }
+      const hist=new Uint32Array(1024); let s1=0,s2=0,lo=1e9,hi=-1e9; for(let k=0;k<M.length;k++){ const v=M[k]; s1+=v; s2+=v*v; if(v<lo) lo=v; if(v>hi) hi=v; }
+      for(let k=0;k<M.length;k++) hist[Math.min(1023,((M[k]-lo)/(hi-lo+1e-9)*1024)|0)]++;
+      const m=M.length, sdv=Math.sqrt(Math.max(1e-9,s2/m-(s1/m)*(s1/m))); let c=0, q=1023; for(;q>0;q--){ c+=hist[q]; if(c>=cov*m) break; }
+      th=lo+(hi-lo)*q/1024; k2=1/(soft*sdv); }
+    const I=C(P.ink), Pp=C(P.paper), out=g.createImageData(w,h), d=out.data, lg=P.lift?P.lift[0]:0, lc=P.lift?P.lift[1]:0;
+    const gw=(gain||fib)?(gain||fib).gw:0, gh=(gain||fib)?(gain||fib).gh:0, X0=new Int32Array(w), WX=new Float32Array(w);   // bilinear taps per column
+    for(let px=0;px<w;px++){ const fx=clamp((px+0.5)/s/FCELL,0,gw-1.001); X0[px]=fx|0; WX[px]=fx-(fx|0); }
+    const ga=gain?gain.a:null, fa=fib?fib.a:null, B0=dg[0]?dg[0][0]:null, B1=dg[1]?dg[1][0]:null, L0=LF[0], L1=LF[1];
+    for(let py=0;py<h;py++){ const fy=clamp((py+0.5)/s/FCELL,0,gh-1.001), j=fy|0, wy=fy-j, r0=j*gw, r1=r0+gw, tr=(py%TH)*TW; let tx=0;
+      for(let px=0;px<w;px++,tx=tx===TW-1?0:tx+1){ const i=py*w+px, y=Y[i], k0=r0+X0[px], k1=r1+X0[px], wx=WX[px];
+        let v=LD[Math.min(2048,y/Math.max(1,255-A[i])*1024)|0];
+        if(B0) v*=L0[Math.min(2048,y/Math.max(1,255-B0[i])*1024)|0];
+        if(B1) v*=L1[Math.min(2048,y/Math.max(1,255-B1[i])*1024)|0];
+        const gn=ga?(ga[k0]+(ga[k0+1]-ga[k0])*wx)*(1-wy)+(ga[k1]+(ga[k1+1]-ga[k1])*wx)*wy:1;
+        let ink=v<1?(1-v)*gn:0; if(M){ const u=(M[tr+tx]-th)*k2+0.5; if(u>0) ink+=LT[(y*4.0157)|0]*gn*(u>=1?1:u); }
+        const vv=1-Math.min(1,ink)+(v>1?Math.min(lc,(v-1)*lg):0);
+        const e=fa?((fa[k0]+(fa[k0+1]-fa[k0])*wx)*(1-wy)+(fa[k1]+(fa[k1+1]-fa[k1])*wx)*wy)*Math.min(1,vv):0, jj=4*i;
+        d[jj]=I[0]+(Pp[0]-I[0])*vv+e+0.5; d[jj+1]=I[1]+(Pp[1]-I[1])*vv+e+0.5; d[jj+2]=I[2]+(Pp[2]-I[2])*vv+e+0.5; d[jj+3]=255; } }
+    g.putImageData(out,0,0); }); }
+
+/* ---- reveals: time fields at 1/4 resolution (frames), thresholded per frame ----
+   T(x, y) = t0 + ax*x + ay*y + sigma*N(x, y), x, y normalised, N = fBm (cells c, c/2, c/4 with c = cell * width;
+   amplitudes oct, default 1, 1/2, 1/4; one lattice table per octave, each rotated by rot[k] radians so no lattice axis
+   dominates: an axis-aligned octave shows as a straight ghost stripe in the reveal) with its best-fit plane removed (a
+   seeded fBm carries a random tilt: removed, the ramp alone sets the direction on every seed), then normalised to unit
+   std. A pixel arrives over hw frames either side of its T. lo / hi: soft floor and ceiling [knee, limit] (the paper
+   stays blank until the marks cue, the earliest colour waits for the wash cue, the latest colour is complete when the
+   finish ends); lo[2..4] (optional): the floor (knee and limit) rises by lo[2] frames per frame height below y = lo[3],
+   by at most lo[4] frames, so only the top band can open first. top: [frames, band, cell, thr, soft]: the top edge comes
+   that much earlier, fading out over `band` of the height; with `cell` (a fraction of the width) the advance is gated
+   along x by a value noise of that cell, smoothstep((n - thr) / soft) (thr 0.1, soft 0.4 by default), so the top edge
+   opens as a few separate drips instead of a strip. The defaults suit the cues marks f6, wash f60, finish f73, step f87,
+   done f98: the drawing goes from the top left (ax, ay > 0), first ink at f7, half the paper drawn at f30, 95 % at f46,
+   all of it by about f52; the colour goes the other way, bottom first (ay < 0), in blooms whose alpha stops at the cap,
+   reaches half its final alpha at about f84 and is complete at f97. With the 0.65 cap a pixel looks half painted about
+   1.5 f after the middle of its ramp, hence colour t0 86.3. The low colour floor makes the first blooms separate
+   islands, not a band; finishOf finishes each pixel by its age. */
+const REVEAL=Object.freeze({ settle:0.105,
+  sketch:{t0:9.7, ax:14.2, ay:25.8, sigma:3.2, cell:0.08, oct:[1,0.7,0.45], rot:[0.4,1.3,2.2], hw:1.25, top:[3,0.1], lo:[9.5,7,100,0.05,3]},
+  colour:{t0:86.3, ax:3.2, ay:-15.3, sigma:6.2, cell:0.10, oct:[1,0.8,0.55], rot:[0.6,1.9,1.1], hw:4, blur:1, lo:[66,61], hi:[88,93],
+    finish:{cap:[0.65,0.25,0.10], creep:0.003, kmax:0.3, ceil:[0.9,5,-3,0.2,2]}} });
+function timeField(name,seed,o){ return field(name,{seed,ar:+AR.toFixed(5),v:PAINT_V,t0:o.t0,ax:o.ax,ay:o.ay,sigma:o.sigma,cell:o.cell,oct:o.oct||null,rot:o.rot||null,lo:o.lo||null,hi:o.hi||null,top:o.top||null,off:o.offKey||null},F=>{
+  const oc=[0,1,2].map(k=>noise(hash(seed,name,'oct',k))), nt=o.top&&o.top[2]?noise(hash(seed,name,'top')):null, c=o.cell*LW, a=F.a, gw=F.gw, gh=F.gh, n=a.length, [w0,w1,w2]=o.oct||[1,0.5,0.25];
+  let s=0, sx=0, sy=0, sxx=0, syy=0, sxv=0, syv=0;                     // least-squares plane v ~ m + bx*(x-xm) + by*(y-ym)
+  const rc=(o.rot||[0,0,0]).map(Math.cos), rs=(o.rot||[0,0,0]).map(Math.sin), R=(k,x,y)=>[x*rc[k]-y*rs[k],x*rs[k]+y*rc[k]];   // octave rotations
+  for(let j=0;j<gh;j++) for(let i=0;i<gw;i++){ const x=i*FCELL/c, y=j*FCELL/c, u=i/(gw-1), w=j/(gh-1);
+    const [x0,y0]=R(0,x,y), [x1,y1]=R(1,x,y), [x2,y2]=R(2,x,y);
+    const v=w0*oc[0](x0,y0)+w1*oc[1](2*x1+5.3,2*y1+1.7)+w2*oc[2](4*x2+2.9,4*y2+7.1); a[j*gw+i]=v; s+=v; sx+=u; sy+=w; sxx+=u*u; syy+=w*w; sxv+=u*v; syv+=w*v; }
+  const m=s/n, xm=sx/n, ym=sy/n, bx=(sxv/n-xm*m)/(sxx/n-xm*xm), by=(syv/n-ym*m)/(syy/n-ym*ym);   // x and y are uncorrelated on a full grid
+  let s2=0; for(let j=0;j<gh;j++) for(let i=0;i<gw;i++){ const k=j*gw+i, r=a[k]-m-bx*(i/(gw-1)-xm)-by*(j/(gh-1)-ym); a[k]=r; s2+=r*r; }
+  const sd=Math.sqrt(Math.max(1e-12,s2/n));
+  for(let j=0;j<gh;j++) for(let i=0;i<gw;i++){ const k=j*gw+i; let T=o.t0+o.ax*i*FCELL/LW+o.ay*j*FCELL/LH+o.sigma*a[k]/sd;
+    if(o.top) T-=o.top[0]*smooth(1-j*FCELL/LH/o.top[1])*(nt?smooth((nt(i*FCELL/(o.top[2]*LW),0.5)-(o.top[3]??0.1))/(o.top[4]??0.4)):1);
+    if(o.off) T+=o.off.a[k];
+    if(o.hi&&T>o.hi[0]){ const d=o.hi[1]-o.hi[0]; T=o.hi[0]+d*Math.tanh((T-o.hi[0])/d); }
+    if(o.lo){ const d=o.lo[0]-o.lo[1], l0=o.lo[0]+Math.min(o.lo[4]??1e9,(o.lo[2]||0)*Math.max(0,j*FCELL/LH-(o.lo[3]||0))); if(T<l0) T=l0-d*Math.tanh((l0-T)/d); } a[k]=T; } }); }
+/* the mask of a time field at frame f: alpha = smoothstep(T - hw, T + hw, f) * cap, optionally one 3x3 box blur;
+   written into a pooled 1/4-res canvas (fully rewritten every frame). Returns {c, lo, hi} (min and max alpha) */
+const MASKS=new Map();
+function maskAt(slot,F,f,o){ const {gw,gh}=F, a=F.a, n=a.length, hw=o.hw, cap=o.cap??1, key=slot+'|'+gw+'x'+gh;
+  let M=MASKS.get(key); if(!M){ const c=cvs('mask'+slot,gw,gh), id=c.getContext('2d').createImageData(gw,gh);
+    for(let k=0;k<n;k++){ id.data[4*k]=id.data[4*k+1]=id.data[4*k+2]=255; } M={c,id,m:new Float32Array(n),t:new Float32Array(n)}; MASKS.set(key,M); }
+  const m=M.m, fc=o.fin;
+  if(!fc) for(let k=0;k<n;k++){ const u=(f-a[k]+hw)/(2*hw); m[k]=u<=0?0:u>=1?cap:u*u*(3-2*u)*cap; }
+  else { const {creep,kmax,m0,m1,m2,ms,mw,piv}=fc;   /* per-pixel finish: the cap creeps up with the pixel's age after its ramp
+      (by creep per frame, at most kmax), under a ceiling m0 that opens to 1 over mw frames from a time that follows T */
+    for(let k=0;k<n;k++){ const T=a[k], u=(f-T+hw)/(2*hw); if(u<=0){ m[k]=0; continue; }
+      const fe=Math.min(m2,Math.max(m1,m1+ms*(T-piv))), ce=Math.min(1,m0+(1-m0)*Math.max(0,(f-fe)/mw)), c=Math.min(ce,cap+Math.min(kmax,creep*Math.max(0,f-T-hw)));
+      m[k]=u>=1?c:u*u*(3-2*u)*c; } }
+  if(o.blur){ const t=M.t; for(let p=0;p<o.blur;p++){
+    for(let j=0;j<gh;j++){ const r=j*gw; for(let i=0;i<gw;i++) t[r+i]=(m[r+Math.max(0,i-1)]+m[r+i]+m[r+Math.min(gw-1,i+1)])/3; }
+    for(let j=0;j<gh;j++){ const r0=Math.max(0,j-1)*gw, r=j*gw, r1=Math.min(gh-1,j+1)*gw; for(let i=0;i<gw;i++) m[r+i]=(t[r0+i]+t[r+i]+t[r1+i])/3; } } }
+  let lo=1,hi=0; const d=M.id.data; for(let k=0;k<n;k++){ const v=m[k]; if(v<lo) lo=v; if(v>hi) hi=v; d[4*k+3]=v*255+0.5; }
+  const c=cvs('mask'+slot,gw,gh); c.getContext('2d').putImageData(M.id,0,0); return {c,lo,hi}; }
+/* the settling glaze: while the colour finishes (finish -> step) the painting is pulled toward grey by REVEAL.settle
+   (0.105, about a tenth of its saturation) and it settles back between `done` and `alive`, like fresh paint drying into
+   colour. A grey fill in 'saturation' mode at alpha d keeps luminosity and pulls saturation toward grey by d; at
+   `alive` d = 0 and the frame is exactly the still the living phase starts from */
+function desat(g,d){ if(d<0.004) return;   /* below 0.4 % the change is under half a level */
+  g.save(); g.setTransform(1,0,0,1,0,0); g.globalCompositeOperation='saturation'; g.globalAlpha=d;
+  g.fillStyle='#808080'; g.fillRect(0,0,g.canvas.width,g.canvas.height); g.restore(); }
+/* draw a cached layer through a mask: the layer into a pooled full-size canvas (desaturated by d), destination-in the
+   upscaled mask, over g; both under g's transform (the camera), so the drawing, the mask and the paint stay registered */
+function through(g,src,M,slot=0,d=0){ if(M.hi<=0) return; if(M.lo>=1&&d<0.004){ blit(g,src); return; }
+  const W=g.canvas.width, H=g.canvas.height, t=cvs('thru'+slot,W,H), tg=wipe(t.getContext('2d'));
+  tg.setTransform(g.getTransform()); tg.imageSmoothingEnabled=true; blit(tg,src); desat(tg,d);   // g's transform: the camera
+  if(M.lo<1){ tg.globalCompositeOperation='destination-in'; drawField(tg,M.c); }
+  g.save(); g.setTransform(1,0,0,1,0,0); g.drawImage(t,0,0); g.restore(); }
+/* the colour finish: blooms stop at cap[0], the base cap rises by cap[1] from `finish` to the frame before `done` and
+   steps by cap[2] at `step`; per pixel the cap creeps with age (`creep` per frame, at most `kmax`), so early blooms
+   are fuller than late ones before the step, under a ceiling ceil[0] that opens to 1 over ceil[4] frames from
+   clamp(step + ceil[1] + ceil[3] * (T - wash - 10), step + ceil[1], done + ceil[2]): early pixels finish first */
+function finishOf(f,fo){ const c=fo.cap, ce=fo.ceil;
+  return { cap:Math.min(1,c[0]+c[1]*span(f,cue('finish'),cue('done')-1)+c[2]*(f>=cue('step'))),
+    fin:{creep:fo.creep, kmax:fo.kmax, m0:ce[0], m1:cue('step')+ce[1], m2:cue('done')+ce[2], ms:ce[3], mw:ce[4], piv:cue('wash')+10} }; }
+/* the reveal time fields and their options (no pixels: the sound's curves read them too) */
+function revealFields(seed){ const SR=SCENE.reveal||{}, OF=SR.offset||{};
+  const SC=SR.colour||{}, RV={ settle:SR.settle??REVEAL.settle, sketch:Object.assign({},REVEAL.sketch,SR.sketch||{}),
+    colour:Object.assign({},REVEAL.colour,SC,{finish:Object.assign({},REVEAL.colour.finish,SC.finish||{})}) };   // colour.finish merges key by key too
+  for(const k of ['sketch','colour']) if(OF[k]){ const key='revealOff_'+k+'|'+(SR.v||0);   // scene offsets in frames, softened by `blur` cells
+    RV[k].off=field('revealOff_'+k,{ar:+AR.toFixed(5),v:SR.v||0},F=>{ for(let j=0;j<F.gh;j++) for(let i=0;i<F.gw;i++) F.a[j*F.gw+i]=OF[k](i*FCELL,j*FCELL); if(SR.blur) blurField(F,SR.blur); }); RV[k].offKey=key; }
+  return { RV, Ts:timeField('Ts',seed,RV.sketch), Tc:timeField('Tc',seed,RV.colour) }; }
+/* the kit's reveal caches, built on first use (a frame after `done` never builds them) */
+function reveals(K){ if(K.R) return K.R; const G=SCENE.pencil||{}, RF=revealFields(K.seed);
+  const gain=G.gain?field('pencilGain',{seed:K.seed,ar:+AR.toFixed(5),v:G.v||0},F=>{ for(let j=0;j<F.gh;j++) for(let i=0;i<F.gw;i++) F.a[j*F.gw+i]=G.gain(i*FCELL,j*FCELL); if(G.blur) blurField(F,G.blur); }):null;
+  return (K.R={ RV:RF.RV, paper:paperOf(K), sketch:SCENE.sketch?SCENE.sketch(K):pencilOf(K,K.still,Object.assign({},G.o||{},{gain,gainKey:gain?'pencilGain|'+(G.v||0):null})), Ts:RF.Ts, Tc:RF.Tc }); }
+/* per-frame curves for the sound (RISO.curves().frames): sketch and colour = the revealed share of the drawing and of the
+   paint (the mean of their masks), life = L, gust = the wind w(t) (what sways moves by L * w), z = the camera zoom, plus
+   the scene's own fields from SCENE.curves(K, f, tau, life) (a foam share, a count of births). Evaluated from the time fields and the life clock (the scene's curves may read the kit built at 320 px). */
+function paintingCurves(seed){ const RF=revealFields(seed), sk=RF.RV.sketch, co=RF.RV.colour, K=kit(seed,320), out=[];
+  const share=(F,f,o)=>{ const a=F.a, hw=o.hw; let s=0; for(let k=0;k<a.length;k+=7){ const u=(f-a[k]+hw)/(2*hw); s+=u<=0?0:u>=1?1:u*u*(3-2*u); } return s/Math.ceil(a.length/7); };
+  for(let f=0;f<TOTAL();f++){ const L=lifeAt(f), tau=lifeClock(f), fo=finishOf(f,co.finish);
+    const r={ f, sketch:+(f>=cue('wash')?1:share(RF.Ts,f,sk)).toFixed(4), colour:+(f<cue('wash')?0:f>=cue('done')?1:share(RF.Tc,f,co)*fo.cap).toFixed(4),
+      life:+L.toFixed(4), gust:+gust(f/FPS,seed).toFixed(4), z:+camAt(f).z.toFixed(5) };
+    if(SCENE.curves) Object.assign(r,SCENE.curves(K,f,tau,L));
+    out.push(r); }
+  return out; }
+/* one frame of the painting film: every plate calls this. Paper -> the drawing uncovered by Ts -> the painting over the
+   whole drawing through Tc and the two-stage cap -> from `done` the still, settling and fading into its living layers at
+   rest until `alive` -> from `alive` the living painting (life clock, amplitude, wind), all under the camera. */
+/* the still over the page's background colour, opaque (the still has a few see-through specks where no layer covers the
+   paper; the living frames' cross-fade must hide what lies under them too). Built from the still, cached */
+function stillOnPaper(K){ return layer('stillPaper',K.deps,[0,0,LW,LH],g=>{ g.fillStyle=COL.bg; g.fillRect(0,0,LW,LH); blit(g,K.still); }); }
+function drawPainting(S){
+  const K=kit(S.seed,S.cv.width), g=S.g, f=S.f, set=(SCENE.reveal&&SCENE.reveal.settle)??REVEAL.settle, d=set*sstep(cue('finish'),cue('step'),f)*(1-sstep(cue('done'),cue('alive'),f));
+  const cam=camAt(f), L=lifeAt(f); camSet(g,S.cv.width/LW,cam);
+  if(f>=cue('done')){ composeLive(g,K,lifeClock(f),L,f/FPS);
+    const a=cue('done'), b=cue('alive'), xf=f<b?1-(f-a)/(b-a):0; if(xf>0){ g.globalAlpha=xf; blit(g,stillOnPaper(K)); g.globalAlpha=1; }   // done -> alive: the still fades into its living layers at rest (no step when life starts)
+    desat(g,d); return; }
+  const Rv=reveals(K), sk=Rv.RV.sketch, co=Rv.RV.colour;
+  if(f<cue('wash')){ drawField(g,Rv.paper); through(g,Rv.sketch,maskAt(0,Rv.Ts,f,sk),0); }
+  else { const fo=finishOf(f,co.finish); blit(g,Rv.sketch); through(g,K.still,maskAt(1,Rv.Tc,f,{hw:co.hw,blur:co.blur,cap:fo.cap,fin:fo.fin}),1,d); }
+}
+/* ===== end painting kit ===== */
+
+/* ===== scene ===== */
+/* The demo: a mountain lake at dawn. Replace this block with your picture; the painting kit above stays as it is.
+   The sun over two ridges in aerial perspective, a cloud band that drifts, a calm lake that mirrors all of it and
+   trembles when alive, glitter on the sun's path that fades in and out, a band of reeds in front that sways on the
+   page's wind. Coordinates are fractions of the 16:9 frame (x, y from the top left), turned into logical px by toL().
+   Layers back to front: sky (the sun in its base, the cloud band a part that drifts), ridges, lake (a painted mirror,
+   drawn in trembling strips once alive, plus glitter), bank (the cached back reeds), reeds (front blades, every frame). */
+const SCENE=(()=>{
+  const S={ horizon:0.56, tRef:0, camera:{focus:[0.60,0.46]} };   // the push-in closes on the sun and its path
+  const Hn=S.horizon, SUN=[0.60*LW,0.33*LH], SUN_R=30;
+  const FAR=[[-0.02,0.40],[0.05,0.36],[0.11,0.315],[0.17,0.29],[0.22,0.305],[0.29,0.35],[0.37,0.395],[0.45,0.43],[0.53,0.455],
+             [0.60,0.465],[0.67,0.45],[0.74,0.41],[0.80,0.36],[0.86,0.325],[0.91,0.335],[0.97,0.365],[1.02,0.39]];
+  const NEAR_L=[[-0.02,0.445],[0.05,0.435],[0.12,0.45],[0.20,0.475],[0.28,0.505],[0.36,0.53],[0.43,0.55],[0.48,0.562]];
+  const NEAR_R=[[0.70,0.562],[0.76,0.545],[0.83,0.515],[0.90,0.495],[0.96,0.49],[1.02,0.495]];
+  const under=(L,y1=Hn+0.004)=>{ const P=toL(L); return P.concat([[P[P.length-1][0],y1*LH],[P[0][0],y1*LH]]); };
+  const reedTop=x=>(0.90-0.07*Math.pow(Math.min(1,Math.abs(x/LW-0.5)*2),1.5))*LH;   // the reed band: higher at the sides
+
+  /* ---- sky: pale lilac-blue above, rose and peach toward the horizon, a warm glow around the sun ---- */
+  const skyRamp=ramp([[0,'#A7B2CE'],[0.3,'#C4B6CB'],[0.55,'#E4AFA4'],[0.75,'#F0BA9F'],[0.9,'#F5CDAE'],[1,'#F7DCBC']]);
+  function skyCol(x,y){ const c=skyRamp(clamp(y/(Hn*LH))), r=Math.hypot((x-SUN[0])/LW,(y-SUN[1])/LH*0.9);
+    return mixc(mixc(c,C('#FBE3B8'),0.75*Math.exp(-r*r/0.012)),C('#FFF3D6'),0.8*Math.exp(-r*r/0.0012)); }
+  function paintSky(g,R,K,P){
+    fieldFill(g,[-0.04*LW,0,1.08*LW,(Hn+0.01)*LH],skyCol,10);                         // a smooth base coat under the marks
+    paintRegion(g,R,{name:'sky',P:toL([[-0.05,-0.02],[1.05,-0.02],[1.05,Hn+0.01],[-0.05,Hn+0.01]]),len:[26,64],wid:[9,17],flow:0,angJit:9,cover:1.5,
+      imp:0.3,ridgeP:0.35,br:0.5,brP:0.4,rag:0.3,cluster:80,jit:[3,0.04,0.03],col:(x,y,v)=>hsl(skyCol(x,y),0,0,0.02*v)},K.seed);
+    const gr=g.createRadialGradient(SUN[0],SUN[1],0,SUN[0],SUN[1],SUN_R*4.2);        // the sun: a glow, a disc of pale dabs, a warm rim
+    gr.addColorStop(0,'rgba(255,250,228,1)'); gr.addColorStop(0.25,'rgba(255,238,190,0.8)'); gr.addColorStop(0.5,'rgba(255,226,170,0.35)'); gr.addColorStop(1,'rgba(255,220,170,0)');
+    g.fillStyle=gr; g.fillRect(SUN[0]-SUN_R*4.5,SUN[1]-SUN_R*4.5,SUN_R*9,SUN_R*9);
+    for(let i=0;i<70;i++){ const a=R.r(0,TAU), rr=Math.sqrt(R.f())*SUN_R; dab(g,SUN[0]+Math.cos(a)*rr,SUN[1]+Math.sin(a)*rr,R.r(8,16),R.r(5,9),R.r(-20,20)*DEG,R.pick(['#FFFBEA','#FFF7DC','#FFF2CC']),R,{imp:0.15,jit:[2,0.02,0.01]}); }
+    for(let i=0;i<26;i++){ const a=R.r(0,TAU); dab(g,SUN[0]+Math.cos(a)*SUN_R,SUN[1]+Math.sin(a)*SUN_R,R.r(7,12),R.r(2.5,4),a+Math.PI/2,R.pick(['#FFD98A','#FFE3A0']),R,{imp:0,alpha:0.8}); }
+    paintClouds(P[0],R,K); }
+  /* the cloud band: long streaks with rose-lilac bellies and lit tops, warmest near the sun, broken into banks by a noise */
+  function paintClouds(g,R,K){ const nz=noise(hash(K.seed,'cloud'));
+    for(let i=0;i<2400;i++){ const x=R.r(-0.08,1.08)*LW, yc=(0.18+0.025*nz(x/300,0.5))*LH, th=(0.025+0.02*(nz(x/160,2.5)+1))*LH, y=yc+R.g()*th*0.45;
+      if(R.f()>clamp(0.45+0.9*nz(x/240,7.1))) continue;
+      const up=clamp(0.5-(y-yc)/th), toSun=Math.exp(-Math.pow((x-SUN[0])/(0.3*LW),2));
+      const col=mixc(mixc(C('#C7A3B3'),C('#F3C8AE'),clamp(up+0.2*nz(x/50,y/50))),C('#FFE4BC'),0.55*toSun*up);
+      dab(g,x,y,R.r(30,90),R.r(6,13),R.r(-5,5)*DEG,col,R,{imp:0.3,ridgeP:0.35,alpha:R.r(0.7,1),br:0.4,brP:0.3,rag:0.3,taper:[0.4,1,0.5]}); } }
+
+  /* ---- ridges: the far one pale lilac-blue, the near ones dark blue-green conifer slopes; both fade toward the haze
+     colour below their skyline (aerial perspective) and warm up near the sun ---- */
+  function paintRidges(g,R,K){ const warm=x=>Math.exp(-Math.pow((x-SUN[0])/(0.2*LW),2));
+    const haze=(Q,x,y)=>{ const t=yOn(Q,x); return clamp((y-t)/Math.max(8,Hn*LH-t)); };   // 0 on the skyline, 1 at the water
+    const F=toL(FAR);
+    paintRegion(g,R,{name:'far',P:under(FAR),base:'#999BBC',len:[18,40],wid:[6,11],flow:x=>12*Math.sin(x/140),angJit:14,cover:2.2,imp:0.3,ridgeP:0.4,br:0.5,brP:0.4,rag:0.3,cluster:60,
+      col:(x,y,v)=>mixc(mixc(mixc(C('#8388AE'),C('#ABA7C2'),0.5+0.35*v),C('#E6C6C0'),0.5*haze(F,x,y)),C('#F2CBB0'),0.3*warm(x)),
+      accents:{share:0.03,len:[10,26],wid:[1.5,3],dl:-0.12}},K.seed);                // thin dark accents: they become the drawing
+    for(const [nm,L] of [['nearL',NEAR_L],['nearR',NEAR_R]]){ const Q=toL(L);
+      paintRegion(g,R,{name:nm,P:under(L),base:'#3A5250',len:[10,22],wid:[4,8],flow:-90,angJit:10,cover:2.8,imp:0.4,ridgeP:0.5,br:0.4,brP:0.4,rag:0.3,cluster:40,
+        col:(x,y,v)=>mixc(mixc(C('#2D4644'),C('#4A635C'),0.5+0.45*v),C('#9A8FA0'),0.4*haze(Q,x,y)),
+        accents:{share:0.05,len:[8,18],wid:[1.5,3],dl:-0.12},lights:{share:0.03,len:[6,12],wid:[1.5,3],col:()=>R.pick(['#9A8C62','#A89A6A','#7D8A66'])}},K.seed);
+      for(let i=0;i<Q.length-1;i++) for(let k=0;k<14;k++){ const u=R.f(), x=lerp(Q[i][0],Q[i+1][0],u), y=lerp(Q[i][1],Q[i+1][1],u);   // conifer tips on the skyline
+        dab(g,x,y-R.r(2,8),R.r(12,22),R.r(3,5),-90*DEG+R.r(-0.1,0.1),R.pick(['#2C4441','#355049','#3E5A55']),R,{imp:0.3,taper:[1,0.7,0.15]}); } }
+    for(let i=0;i<420;i++) dab(g,R.r(-0.02,1.02)*LW,(Hn+R.r(-0.003,0.003))*LH,R.r(10,26),R.r(2,4),R.r(-6,6)*DEG,R.pick(['#4A4A5E','#56526A','#3F4556']),R,{imp:0,alpha:0.85}); }   // the shore line
+
+  /* ---- the lake: the sky and the ridges drawn flipped about the shore line, darker and bluer toward the viewer, then
+     repainted as horizontal marks whose colours are read from that mirror (getImageData, only while building); ripple
+     streaks and a gold path under the sun. A painted reflection, not a photo flip ---- */
+  const lakeRect=()=>[-0.04*LW,(Hn-0.004)*LH,1.08*LW,(1.004-Hn)*LH+2];
+  function paintLake(g,R,K){ const r=lakeRect(), y0=Hn*LH, s=g.getTransform().a, nr=noise(hash(K.seed,'ripple'));
+    g.fillStyle='#35667A'; g.fillRect(r[0],r[1],r[2],r[3]);
+    g.save(); g.beginPath(); g.rect(r[0],y0,r[2],r[3]); g.clip();
+    g.save(); g.translate(0,2*y0); g.scale(1,-1);
+    for(const n of ['sky','ridges']){ const c=K.L[n]; blit(g,c); if(c.parts) c.parts.forEach(p=>blit(g,p)); }
+    g.restore();
+    const gr=g.createLinearGradient(0,y0,0,LH); gr.addColorStop(0,'rgba(79,124,142,0.18)'); gr.addColorStop(0.3,'rgba(58,106,128,0.48)'); gr.addColorStop(1,'rgba(30,72,90,0.80)');
+    g.fillStyle=gr; g.fillRect(r[0],y0,r[2],r[3]); g.restore();
+    const w=g.canvas.width, h=g.canvas.height, id=g.getImageData(0,0,w,h).data;
+    const at=(x,y)=>{ const px=clamp(Math.round((x-r[0])*s),0,w-1), py=clamp(Math.round((y-r[1])*s),0,h-1), k=(py*w+px)*4; return [id[k],id[k+1],id[k+2]]; };
+    for(let y=y0+1;y<LH+4;){ const p=persp(y), dy=3.2*p;                             // rows of horizontal marks, larger toward the viewer
+      for(let x=r[0]-R.r(0,40);x<r[0]+r[2];){ const len=R.r(24,70)*p, px=x+R.r(-6,6), py=y+R.r(-0.5,0.5)*dy;
+        dab(g,px,py,len,R.r(2.6,5.5)*p,R.r(-2,2)*DEG,hsl(at(px,py),0,0.02,0.035*nr(px/90,py/(14*p))),R,{imp:0.35,ridgeP:0.3,br:0.4,brP:0.3,rag:0.25,jit:[2,0.03,0.02],bend:R.r(-0.05,0.05),taper:[0.5,1,0.5]});
+        x+=len*R.r(0.45,0.8); }
+      y+=dy; }
+    for(let i=0;i<2600;i++){ const yy=R.r(y0+4,LH), p=persp(yy), xx=R.r(r[0],r[0]+r[2]), light=R.f()<0.5;   // ripple streaks: pale lines, dark troughs
+      if(R.f()<0.5*(1-depth(yy))) continue;
+      dab(g,xx,yy,R.r(20,80)*p,R.r(1.2,2.6)*p,R.r(-1.5,1.5)*DEG,light?hsl(at(xx,yy),0,-0.05,0.12):R.pick(['#244E5E','#2A5566','#1F4757']),R,{imp:0,alpha:light?R.r(0.4,0.75):R.r(0.5,0.85),jit:[2,0.03,0.02],taper:[0.3,1,0.3]}); }
+    const my=2*y0-SUN[1];                                                            // the gold path: the sun's mirror in dashes
+    for(let i=0;i<1600;i++){ const yy=R.r(y0+2,LH), sig=(0.012+0.06*Math.pow(depth(yy),0.8))*LW, xx=SUN[0]+R.g()*sig, p=persp(yy);
+      if(R.f()>0.35+0.65*Math.exp(-Math.pow((yy-my)/(0.07*LH),2))) continue;
+      dab(g,xx,yy,R.r(10,40)*p,R.r(1.5,3.6)*p,R.r(-2,2)*DEG,R.pick(['#F7CF86','#FBDD9E','#F2BF74','#FFE8B8']),R,{imp:0.25,alpha:(0.45+0.5*Math.exp(-Math.pow((xx-SUN[0])/sig,2)/2))*R.r(0.7,1),jit:[3,0.04,0.03],taper:[0.4,1,0.4]}); } }
+  /* alive: the cached lake drawn in strips of 3-9 px (thinner at the shore), each shifted sideways by a smooth noise of
+     (y, tau) that grows toward the viewer; a strip overlaps the next by a device row so no seam opens. At tau 0 nothing
+     runs and the static layer shows, so the still is unchanged */
+  function lakeLive(g,K,tau,life){ if(tau<=0) return; const c=K.L.lake, s=c.s, r=c.rect, nt=noise(hash(K.seed,'tremble'));
+    for(let y=r[1];y<r[1]+r[3];){ const d=depth(y+2), hh=3+6*d, amp=(0.4+5.5*Math.pow(d,1.3))*life, dx=amp*(0.7*nt(y/(10+30*d),tau*0.55)+0.3*Math.sin(TAU*(tau/2.3+y/(40+80*d))));
+      const sy=(y-r[1])*s, sh=Math.min(c.height-sy,hh*s+1.5); if(sh<=0) break;
+      g.drawImage(c,0,sy,c.width,sh,r[0]+dx,y,c.width/s,sh/s); y+=hh; }
+    glitterDraw(g,K,tau,life); }
+  /* glitter: fixed sparkles on the sun's path whose alpha follows a smooth noise of tau (they fade, never blink) */
+  const GLITS=new Map();
+  function glitterSet(K){ const key=K.seed+'|'+PAINT_V; let G=GLITS.get(key); if(G) return G; const R=rng(hash(K.seed,'glit')), y0=Hn*LH; G=[];
+    for(let i=0;i<340;i++){ const yy=R.r(y0+3,LH-10), sig=(0.010+0.05*Math.pow(depth(yy),0.8))*LW, p=persp(yy);
+      G.push({x:SUN[0]+R.g()*sig*0.9,y:yy,l:R.r(8,24)*p,w:R.r(1.4,3)*p,ph:R.r(0,100),per:R.r(0.7,1.5),col:css(C(R.pick(['#FFF0C8','#FFE4A6','#FFF6DA'])))}); }
+    GLITS.set(key,G); return G; }
+  function glitterDraw(g,K,tau,life){ const ng=noise(hash(K.seed,'glitt'));
+    for(const q of glitterSet(K)){ const a=life*sstep(0.25,0.75,ng(tau/q.per+q.ph,q.ph*0.37)); if(a<0.03) continue;
+      g.globalAlpha=a; dabFast(g,q.x+0.75*tau*persp(q.y),q.y,q.l,q.w,0,0,[0.3,1,0.3],q.col); }
+    g.globalAlpha=1; }
+
+  /* ---- reeds: a dense back mass of short dark blades on an olive bank (cached) and tall front reeds drawn every frame,
+     bending with the page's gust as it travels right to left at 700 px/s ---- */
+  const REED_PAL=['#8C8A3E','#B59A55','#6E7034','#9E8E48','#C4A763','#5E6430'];
+  const reedP=y=>0.6+0.8*clamp((y/LH-0.8)/0.2);                                     // reed size: larger toward the viewer
+  function paintBank(g,R,K){ const nb=noise(hash(K.seed,'bank'));
+    for(let i=0;i<2600;i++){ const x=R.r(-0.02,1.02)*LW, y=R.r(0.80,1.04)*LH; if(y<reedTop(x)+18) continue;
+      dab(g,x,y,R.r(12,30),R.r(5,10),R.r(-25,25)*DEG,R.pick(['#3E4420','#4A4E24','#343A1C','#565A2A']),R,{imp:0.4,ridgeP:0.4}); }
+    for(let i=0;i<3400;i++){ const x=R.r(-0.02,1.02)*LW, y=R.r(0.78,1.04)*LH; if(y<reedTop(x)) continue; const p=reedP(y);
+      blade(g,x,y,R.r(30,90)*p,R.r(2.5,5)*p,(-90+R.r(-18,18)+6*nb(x/100,y/100))*DEG,R.r(-10,16)*DEG,jit(R.pick(['#4E5528','#5E6430','#6E7034','#7A7438','#3F4722']),R),{lit:R.f()<0.3?'#B8A15C':null,litA:0.5}); } }
+  function reedList(K){ const R=rng(hash(K.seed,'reeds',PAINT_V)), nl=noise(hash(K.seed,'reedlean')), out=[];
+    for(let i=0;i<900;i++){ const x=R.r(-0.02,1.02)*LW, y=R.r(0.80,1.04)*LH; if(y<reedTop(x)) continue; const p=reedP(y), tall=R.f()<0.2;
+      out.push({x,y,len:(tall?R.r(150,250):R.r(50,130))*p,w:R.r(2.5,5.5)*p,a:(-85+R.r(-14,14)+10*nl(x/160,0.5))*DEG,b:R.r(-6,24)*DEG,
+        col:jit(R.pick(REED_PAL),R),lit:R.f()<0.45?R.pick(['#E2CB86','#F0D89A']):null,m:R.r(0.7,1.2),ph:R.r(0,50)}); }
+    return out.sort((a,b)=>a.y-b.y); }                                                // far to near: nearer blades cover farther ones
+  function drawReeds(g,K,tau,life,t){ const nj=noise(hash(K.seed,'reedj'));
+    for(const r of K.reeds){ const w=life*(gust(t-(LW-r.x)/700,K.seed)*0.055+0.02*nj(t/0.7,r.ph))*r.m;   // at life 0 every blade is at rest
+      blade(g,r.x,r.y,r.len,r.w,r.a+w*0.6,r.b+w,r.col,{lit:r.lit,litA:0.55,tip:0.15}); } }
+
+  S.prepare=K=>{ K.reeds=reedList(K); };
+  /* the drawing: a pencil gain per region, lighter on the water than in the sky, the land and the reeds */
+  S.pencil={ v:1, blur:2, gain:(x,y)=>{ const ny=y/LH; if(ny<0.28) return 1.28; if(ny<Hn+0.01) return 1.25; return y>reedTop(x)?1.3:1.08; } };
+  /* the first ink: a few drips along the top edge (the top band 3.5 f early, gated in x by a noise); below it the paper waits until about f10 */
+  S.reveal={ v:1, sketch:{top:[3.5,0.06,0.05,0.05,0.3], lo:[8.5,6.5,100,0.04,3.5]} };
+  S.layers=[
+    {name:'sky',    rect:()=>[-0.04*LW,0,1.08*LW,(Hn+0.01)*LH], paint:paintSky, parts:[{rect:()=>[-0.1*LW,0.08*LH,1.2*LW,0.22*LH],drift:tau=>[3*tau,0]}]},   // clouds: 3 px/s
+    {name:'ridges', rect:()=>[-0.02*LW,0.26*LH,1.04*LW,(Hn-0.25)*LH], paint:paintRidges},
+    {name:'lake',   rect:lakeRect, paint:paintLake, alpha:tau=>tau>0?0:1, live:lakeLive},   // alive, the static layer hides and live() draws the strips
+    {name:'bank',   rect:()=>[-0.02*LW,0.62*LH,1.04*LW,0.40*LH], paint:paintBank},
+    {name:'reeds',  live:drawReeds},
+  ];
+  return S;
+})();
+/* ===== end scene ===== */
+
+/* =====================================================================
+   ENGINE
+   ===================================================================== */
+const PLATES=[];
+/* plate(name, {len, cutIn, cutOut}, fn). len in frames, keep it a multiple of BEAT.
+   fn(S,R): S.t 0..1 progress, S.i local frame, S.f global frame, S.len, S.g context (logical coords),
+   S.b generator re-seeded every 3 frames (live line), S.nz generator per frame (noise),
+   R generator stable for the whole plate (composition). Seeds derive from the plate NAME, so
+   inserting a plate never changes its neighbours. */
+function plate(name,opts,fn){ if(PLATES.some(p=>p.name===name)) console.warn(`duplicate plate name: ${name}`); PLATES.push(Object.assign({name,fn},opts)); }
+function TOTAL(){ return PLATES.reduce((a,p)=>a+p.len,0); }
+function locate(n){ let acc=0; for(let i=0;i<PLATES.length;i++){ if(n<acc+PLATES[i].len) return {idx:i,local:n-acc}; acc+=PLATES[i].len; } const i=PLATES.length-1; return {idx:i,local:PLATES[i].len-1}; }
+/* at(name, x): the global frame of beat x of plate `name`, rounded to a whole frame (x=0: its first frame).
+   For what carries on across cuts (an island that grows through three plates): span(S.f, at('sea'), at('city',4)).
+   Call it while drawing, not at the top level: the plates below are not registered yet. */
+function at(name,x=0){ let acc=0; for(const p of PLATES){ if(p.name===name) return Math.round(acc+x*BEAT); acc+=p.len; } throw new Error(`at(): no plate named ${name}`); }
+/* cue(name): the frame of a moment in CUES, the table the picture and the sound share (RISO.curves() exports it) */
+function cue(name){ const c=CUES.find(c=>c[2]===name); if(!c) throw new Error(`cue(): no cue named ${name}`); return at(c[0],c[1]); }
+
+/* transition drawn by the engine at plate edges; a painting film is one shot: every plate sets cutIn:false and cutOut:false */
+function cut(g,S,amt){ g.save(); g.setTransform(1,0,0,1,0,0); g.fillStyle=`rgba(0,0,0,${amt})`; g.fillRect(0,0,g.canvas.width,g.canvas.height); g.restore(); }   // in pixels: every row, at any width
+
+function renderFrame(n,width,seed,target){
+  n=((n%TOTAL())+TOTAL())%TOTAL();
+  const W=Math.round(width); let H=Math.round(W/AR); if(H%2) H++;   // even height for libx264
+  const cv=cvs('content',W,H), g=wipe(cv.getContext('2d')), sc=W/LW;   // a clean context every frame
+  const {idx,local}=locate(n), P=PLATES[idx];
+  const S={ f:n, i:local, t:local/P.len, len:P.len, g, cv, sc, seed, W:LW, H:LH, name:P.name, post:{},
+            b:rng(hash(seed,'b',P.name,Math.floor(n/3))), nz:rng(hash(seed,'nz',n)) };
+  const R=rng(hash(seed,'plate',P.name));
+  g.fillStyle=COL.bg; g.fillRect(0,0,W,H);                   // in pixels, before the scale: LH*sc can fall short of the even H (853.33 of 854 rows in 9:16 at 480)
+  g.setTransform(sc,0,0,sc,0,0); g.imageSmoothingEnabled=true;
+  P.fn(S,R);
+  const edgeIn=local, edgeOut=P.len-1-local;
+  if(P.cutIn!==false && edgeIn<3) cut(g,S,1-edgeIn/3);
+  else if(P.cutOut!==false && edgeOut<2) cut(g,S,1-edgeOut/2);
+  g.setTransform(1,0,0,1,0,0);
+  if(target.width!==W||target.height!==H){ target.width=W; target.height=H; }
+  post(cv,target,S,S.post);
+  return S;
+}
+
+function contactSheet(n,cellW,seed,target,f0=0,f1=TOTAL()-1){   // f0..f1: a sheet of one section
+  const cols=AR>=1?6:8, rows=Math.ceil(n/cols), cellH=Math.round(cellW/AR), lab=26, gap=8;
+  const SW=cols*(cellW+gap)+gap, SH=rows*(cellH+lab+gap)+gap;
+  target.width=SW; target.height=SH; const g=target.getContext('2d');
+  g.fillStyle='#181818'; g.fillRect(0,0,SW,SH);
+  const tmp=cvs('cell',cellW*2,Math.round(cellW*2/AR));     // render at 2x, downscale: post-processing stays honest
+  for(let i=0;i<n;i++){
+    const f=n>1?Math.round(f0+i*(f1-f0)/(n-1)):f0;
+    const S=renderFrame(f,cellW*2,seed,tmp);
+    const x=gap+(i%cols)*(cellW+gap), y=gap+Math.floor(i/cols)*(cellH+lab+gap);
+    g.drawImage(tmp,x,y,cellW,cellH);
+    g.fillStyle='#ddd'; g.font='12px Menlo, monospace'; g.textBaseline='top';
+    g.fillText(`f=${f}  ${S.name}  t=${S.t.toFixed(2)}  ${(f/FPS).toFixed(1)}s`,x+2,y+cellH+6);
+  }
+}
+
+/* =====================================================================
+   PLATES. One shot in three chapters of time; every plate draws the same painting. Lengths are multiples of BEAT.
+   ===================================================================== */
+
+/* moments the picture and the sound share: [plate, beat, name], beats counted from the plate's start.
+   A plate reads one with cue(name); RISO.curves() exports them and audio.mjs puts its hits on the same frames.
+   The painting kit reads wash, finish, step, done, alive and push; its REVEAL defaults are tuned for these frames. */
+const CUES=[
+  ['sketch',0.4,'marks'],       // f6   the first pencil islands along the top edge
+  ['colour',0,'wash'],          // f60  colour blooms start, bottom first
+  ['colour',13/15,'finish'],    // f73  the colour finishes from 0.65 toward 1
+  ['colour',27/15,'step'],      // f87  a one-frame step of +0.10
+  ['colour',38/15,'done'],      // f98  paint complete: the still
+  ['alive',0,'alive'],          // f105 life ramps in
+  ['alive',1/3,'push'],         // f110 the camera push-in starts
+];
+
+plate('sketch',{len:4*BEAT, cutIn:false, cutOut:false},(S)=>drawPainting(S));   // paper, then the drawing
+plate('colour',{len:3*BEAT, cutIn:false, cutOut:false},(S)=>drawPainting(S));   // the colour washes in and finishes
+plate('alive', {len:17*BEAT, cutIn:false, cutOut:false},(S)=>drawPainting(S));  // the still settles, comes alive, the camera pushes in
+
+/* =====================================================================
+   BOOT
+   ===================================================================== */
+const MAIN=document.getElementById('c'); MAIN.getContext('2d',{willReadFrequently:true});   // read back every frame: keep it on the CPU
+window.RISO={
+  fps:FPS,
+  get total(){ return TOTAL(); },
+  get plates(){ return PLATES.map(p=>({name:p.name,len:p.len})); },
+  frame(n,width,seed){ renderFrame(n,width??WIDTH,seed??SEED,MAIN); return MAIN.toDataURL('image/png'); },
+  contact(n,cellW,f0,f1){ contactSheet(n||24,cellW||480,SEED,MAIN,f0??0,f1??TOTAL()-1); return MAIN.toDataURL('image/png'); },
+  // plate starts for the soundtrack (scripts/export-curves.mjs -> curves.json -> audio.mjs builds its T table from it).
+  // frames: paintingCurves(seed), per frame the revealed share of the drawing and of the colour, life, gust and camera zoom
+  // (plus the scene's own fields). cues: the CUES table as {name, plate, beat, f}, f the frame the picture shows it on.
+  curves(seed){ const start={}; let acc=0; for(const p of PLATES){ start[p.name]=acc; acc+=p.len; }
+    return {fps:FPS,bpm:BPM,total:acc,start,frames:paintingCurves(seed??SEED),cues:CUES.map(([plate,beat,name])=>{ if(!PLATES.some(p=>p.name===plate)) throw new Error(`CUES row ${name}: no plate named ${plate}`);
+      return {name,plate,beat,f:at(plate,beat)}; })}; }
+};
+window.addEventListener('load',()=>{
+  if(Q.has('grid')){ contactSheet(+Q.get('grid')||24,+Q.get('cw')||480,SEED,MAIN,+(Q.get('from')||0),Q.has('to')?+Q.get('to'):TOTAL()-1); window.__ready=true; }
+  else if(Q.has('f')){ renderFrame(+Q.get('f')||0,WIDTH,SEED,MAIN); window.__ready=true; }
+  else { let f=+(Q.get('from')||0), last=0;
+    const tick=(ts)=>{ if(ts-last>=1000/FPS){ last=ts; renderFrame(f++,Math.min(WIDTH,960),SEED,MAIN); } requestAnimationFrame(tick); };
+    requestAnimationFrame(tick); window.__ready=true; }
+});
+</script>
+</body>
+</html>

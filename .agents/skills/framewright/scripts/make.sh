@@ -10,6 +10,7 @@ if [ -z "${SKIP_CHECK:-}" ] && [ -f "$HERE/check.mjs" ]; then node "$HERE/check.
 # the sound reads plate starts and per-frame curves from the page (RISO.curves); a project's own export-curves.mjs wins
 if [ -f export-curves.mjs ]; then node export-curves.mjs curves.json "$SEED"
 elif [ -f "$HERE/export-curves.mjs" ]; then node "$HERE/export-curves.mjs" curves.json "$SEED"; fi
-if [ -f audio.mjs ]; then node audio.mjs track.wav; else echo "no audio.mjs, video will be silent"; fi
+# the seed goes to audio.mjs too: a nature soundtrack (audio-nature.mjs) takes it as its film seed; the classic template ignores it
+if [ -f audio.mjs ]; then node audio.mjs track.wav "$SEED"; else echo "no audio.mjs, video will be silent"; fi
 rm -rf frames && node "$HERE/render.mjs" frames "$SEED" "$WIDTH" "$TABS"
 "$HERE/build.sh" out.mp4

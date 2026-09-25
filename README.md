@@ -1,7 +1,7 @@
 <h1 align="center">framewright</h1>
 
 <p align="center">
-  <a href="https://github.com/smwbev/framewright/releases"><img src="https://img.shields.io/badge/version-1.3.0-08C?style=flat" alt="Version 1.3.0" /></a>
+  <a href="https://github.com/smwbev/framewright/releases"><img src="https://img.shields.io/badge/version-1.4.0-08C?style=flat" alt="Version 1.4.0" /></a>
   <a href="https://agentskills.io"><img src="https://img.shields.io/badge/agent%20skill-agentskills.io-08C?style=flat" alt="Follows the Agent Skills specification" /></a>
   <a href="https://agents.md"><img src="https://img.shields.io/badge/AGENTS.md-ready-08C?style=flat" alt="Ships an AGENTS.md" /></a>
   <img src="https://img.shields.io/badge/agents-Claude%20Code%20%C2%B7%20Codex%20%C2%B7%20Gemini%20CLI%20%C2%B7%20Cursor-4493F8?style=flat" alt="Works with Claude Code, Codex, Gemini CLI, Cursor and more" />
@@ -20,6 +20,27 @@
 </p>
 
 ---
+
+## A drawing that becomes a painting
+
+<p align="center">
+  <img src="examples/lake-dawn/preview.webp" alt="Lake at dawn: a sepia pencil drawing of a mountain lake with a birch, a boat and a jetty appears on blank paper, oil colour rises through it from the bottom, the painting comes alive and the camera slowly pushes in" width="480" />
+</p>
+
+<p align="center"><sub><a href="examples/lake-dawn">Lake at dawn</a>, 15 seconds, one 91 KB HTML file, shown at 2× speed: a pencil drawing appears, oil colour rises through it, the lake comes alive; sound from <code>nature.mjs</code>. Full MP4 with sound: <a href="https://github.com/smwbev/framewright/releases/download/v1.4.0/lake-dawn-sample.mp4">lake-dawn-sample.mp4</a> (15 MB).</sub></p>
+
+<p align="center">
+  <img src="examples/lake-dawn/contact-sheet.jpg" alt="Contact sheet of Lake at dawn: blank paper, the first pencil islands along the top edge, the whole drawing, colour blooming in from the bottom with the pencil still visible, the finished painting, the living painting under a slow push-in" width="960" />
+</p>
+
+One view, painted once and shown in three media without a cut. The painting is built from cached
+layers of brush marks. A sepia pencil drawing is computed from it and appears on paper in growing
+islands, top first; the oil colour rises through the drawing from the bottom in soft blooms, the
+lines dissolve, and the painting comes alive: the water trembles, glitter fades in and out, reeds and
+a birch sway on one gust of wind, the camera pushes in. Every frame is still a pure function of
+(frame, seed, width). The soundtrack is wind, water, rustle and birds from `nature.mjs`, timed to the
+film's cues and to the same gust. Start one with `init.sh --painting`; the method is in
+`references/painting.md`, the four painting styles are 13–16 in `references/styles.md`.
 
 ## One world instead of separate scenes
 
@@ -63,8 +84,9 @@ concepts (a literal one, a metaphor, a genre parody), agrees a storyboard on a b
 then builds the video scene by scene, looking at rendered frames after every step. It renders
 the frames, synthesizes a soundtrack to the locked scene lengths, assembles the MP4 and
 checks the file. Photos become posterized polygons, never pixels. Every step has a visual
-checkpoint and a rule against guessing. Both modes above come out of the same workflow: a
-concept told in one take is built as one world.
+checkpoint and a rule against guessing. All three kinds of film above come out of the same
+workflow: a concept told in one take is built as one world, a view that is drawn, painted and
+brought to life as a painting film.
 
 | Step | What the agent does | What you see |
 |---|---|---|
@@ -171,16 +193,26 @@ CLAUDE.md, GEMINI.md           one-line imports of AGENTS.md
 .gemini/settings.json          Gemini CLI reads AGENTS.md
 .agents/skills/framewright/
   SKILL.md                     the workflow
-  references/                  questionnaire and concept generator, styles, engine guide, one-world films, audio, photo, troubleshooting
+  references/                  questionnaire and concept generator, styles, engine guide, one-world films, painting films, audio, photo, troubleshooting
   scripts/                     doctor, init, look, check, render, build, make, export-curves, trace, inject, portrait
-  assets/                      skeleton.html, world.html, audio-template.mjs, storyboard.md
+  assets/                      skeleton.html, world.html, painting.html, audio-template.mjs, audio-nature.mjs, nature.mjs, storyboard.md
 .claude/skills/framewright     symlink for Claude Code
 examples/ris-tv/               a finished video in scenes: index.html, audio.mjs, previews
 examples/honeybee/             a finished one-take film built as one world: index.html, audio.mjs, previews
+examples/lake-dawn/            a finished painting film: index.html, audio.mjs on nature.mjs, previews
 examples/world-demo/           a preview of the demo that init.sh --world scaffolds
 ```
 
 ## Examples
+
+`examples/lake-dawn` is "Lake at dawn", a complete 15-second painting film: a mountain lake at
+sunrise with a birch, a boat and a jetty is drawn in pencil, painted in oil and brought to life. Read
+its `index.html` for the painting kit (layers of brush marks, the pencil drawing computed from the
+painting, the reveals of the drawing and the colour through noisy time fields, life, the push-in), a
+lake that mirrors the sky and the hills and trembles in strips, and reeds and a birch crown that sway
+on one gust; `audio.mjs` builds wind, water, rustle and birds on `nature.mjs` and follows the same
+gust. `npm run example:lake-dawn` writes its contact sheet; the full render is described in its
+README.
 
 `examples/honeybee` is "One line", a complete 56-second film in one take: a golden line draws a
 worker bee's life from an egg in a cell to the comb, the hive, a meadow, the waggle dance and a
@@ -207,11 +239,12 @@ then `cd examples/ris-tv && node audio.mjs ../../track.wav`, then `bash .agents/
 ## Making videos by hand
 
 The skill is also a manual. `references/guide.md` explains the engine, the helpers, the
-timing grid and the review protocol; `references/styles.md` catalogues twelve visual systems
+timing grid and the review protocol; `references/styles.md` catalogues sixteen visual systems
 with post-processing recipes; `references/world.md` covers films made as one continuous world;
-`references/audio.md` and `references/photo.md` cover sound and portraits.
-`assets/skeleton.html` and `assets/world.html` are working starting points: open one in a
-browser for a live preview, add `?f=30&w=1200` for a single frame, `?grid=24` for a contact sheet.
+`references/painting.md` covers painting films; `references/audio.md` and `references/photo.md`
+cover sound, nature ambience and portraits. `assets/skeleton.html`, `assets/world.html` and
+`assets/painting.html` are working starting points: open one in a browser for a live preview, add
+`?f=30&w=1200` for a single frame, `?grid=24` for a contact sheet.
 
 ## License
 

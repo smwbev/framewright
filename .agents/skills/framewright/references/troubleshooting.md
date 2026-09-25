@@ -42,6 +42,25 @@
 | the cover (frame 0) is black or empty | a fade-in, a title that has not faded in, strokes that start at 0 | `FADE_IN = 0`, title `f0` below zero, `PEN_START` with a negative time |
 | a title over the lightbox or paper is unreadable | cream text on a light picture | `{plate: 0.72}` on the title, `TITLE_SCRIM` for the lower half |
 
+## Painting films
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| the drawing is a grey fog | even, same-size dabs: the pencil filter finds no dark marks | lay 3–5 % of each region as thin dark accents 30–60 levels darker (`accents` in `paintRegion`), keep ridges faint in sky and water, raise the region's pencil gain (1.05–1.4) |
+| the tree in the drawing is a grey puff | limbs hidden under even foliage, a pencil gain below 1 on them | dark forking limbs through the crown, foliage thinned where they cross, gain 1.25 or more there |
+| the frame pops when life starts | the still differs from the living layers at rest: a drift, flow, alpha or live hook that is not the identity at `tau = 0` | make every life term 0 at `tau = 0`; shoot f(alive) − 1, f(alive), f(alive) + 1 and diff (`painting.md`, section 11) |
+| a frame changes with render order | a cache keyed without all its inputs, built from the current frame, or kept in a pooled canvas | key by seed, width, aspect, `OVER`, `PAINT_V`, rect and every parameter (a `v` for functions); build from the still or other caches only; caches go through `layer()`, never `cvs()` |
+| reveals read as a wipe | too little noise against the ramp, feathers too narrow | sigma of 3 frames or more on the drawing and 6 on the colour, colour `hw` 4 with the mask blur, feathers 25–60 and 120–260 px |
+| a straight stripe crosses the colour late | an axis-aligned noise tongue | rotated octaves (`rot` in the time field) |
+| the drawing opens on a side edge | the noise dips there before the top opens | a `top` band gated along x and a floor that rises below it (`lo[2..4]`) |
+| glitter blinks | sparkles switched on and off by a hash | fixed sparkles faded by smooth noise: alpha = L · smoothstep(0.25, 0.75, n(tau / per + ph)), per 0.7–1.5 s |
+| a lake mirror looks like a photo flip | the flipped layers shown as they are | repaint the mirror as horizontal marks sampled from it, darker toward the viewer, with ripple streaks and a gold path |
+| seams between trembling strips | strips drawn edge to edge at fractional offsets | each strip reads 1.5 cache pixels more than its step, so neighbours overlap by a device row |
+| the crown bobs like a metronome, or ripples out of phase | a wind of one sine; a random delay per tuft | `gust()` with a wandering amplitude and phase; one gust for the whole crown (at most the crossing delay by x, never a hashed delay per tuft), variety by amplitude, axis tilt and each tuft's own noise |
+| the surf slides as one sheet | foam carried with the crests | deposit foam as a crest passes and let it hold; only rolls, lips and faces ride the crests |
+| slow living frames | too many marks drawn per frame | cache what does not move; per-frame marks with `dabFast`, fewer and larger; one clip for many live marks; motion ghosts only on fast tufts |
+| the end of the push looks soft | the zoom passed `OVER` | a final zoom of `OVER` (1.14) or less, or a larger `OVER` |
+
 ## Portrait
 
 See `photo.md`, section 3.

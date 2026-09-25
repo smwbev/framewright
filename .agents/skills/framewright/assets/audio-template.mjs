@@ -8,11 +8,14 @@
 //   2. Write one block of events per plate (see the demo block and references/audio.md). In a world film let the
 //      line or the character have a voice that follows the picture: follow() below, references/audio.md section 7.
 //   3. Render, look at the waveform:  ffmpeg -i track.wav -filter_complex "showwavespic=s=1800x300:split_channels=1" -frames:v 1 shots/wave.png
+// Nature ambience (sea, wind, leaves, birds, rain) for painting and landscape films starts from assets/audio-nature.mjs
+// instead, a template built on the block module assets/nature.mjs (references/audio.md section 8).
 import fs from 'node:fs';
 
 const SR = 44100, OUT = process.argv[2] || 'track.wav';
 // the film's curves: {fps, bpm, total, start: {plate: frame}, frames: [{f, sp, pan, z}, ...], cues: [{name, f}, ...]}
-// (frames only in world films; cues are the moments the page marks: CUES in the plate skeleton, W.cues in a world film)
+// (frames in world and painting films; cues are the moments the page marks: CUES in the plate and painting skeletons,
+// W.cues in a world film)
 const C = fs.existsSync('curves.json') ? JSON.parse(fs.readFileSync('curves.json', 'utf8')) : null;
 if (C && fs.existsSync('index.html') && fs.statSync('curves.json').mtimeMs < fs.statSync('index.html').mtimeMs)
   console.warn('curves.json is older than index.html: run node scripts/export-curves.mjs curves.json');

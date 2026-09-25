@@ -29,13 +29,14 @@ CLAUDE.md, GEMINI.md              one-line imports of this file for Claude Code 
 .claude/skills/framewright        symlink to the skill for Claude Code
 examples/ris-tv/                  a finished 40-second video in scenes: index.html, audio.mjs, previews
 examples/honeybee/                a finished 56-second film in one take, built as one world
+examples/lake-dawn/               a finished 15-second painting film: index.html, audio.mjs on nature.mjs, previews
 examples/world-demo/              a preview of the demo that init.sh --world scaffolds
 package.json                      npm scripts and the puppeteer dependency for this folder
 ```
 
 After `bash .agents/skills/framewright/scripts/init.sh` the working files appear in the
-root: `index.html`, `audio.mjs`, `storyboard.md`, `scripts/`. That is where the video is
-built when the user works inside this clone.
+root: `index.html`, `audio.mjs`, `storyboard.md`, `scripts/` (and `nature.mjs` after `--painting`).
+That is where the video is built when the user works inside this clone.
 
 ## Rules for every agent
 
@@ -58,6 +59,7 @@ built when the user works inside this clone.
 bash .agents/skills/framewright/scripts/doctor.sh [--install]   # toolchain
 bash .agents/skills/framewright/scripts/init.sh                 # scaffold index.html, scripts/, audio.mjs
 bash .agents/skills/framewright/scripts/init.sh --world         # the same for a film without cuts (one continuous world)
+bash .agents/skills/framewright/scripts/init.sh --painting      # a drawing that becomes a living painting; audio.mjs + nature.mjs make nature sound
 npm install                                                     # puppeteer
 node scripts/look.mjs shot 0,30,60 1200 7                       # frames to look at
 node scripts/look.mjs sheet 24 480 7 shots/sheet.png            # contact sheet
@@ -79,3 +81,11 @@ photo. Render it with
 builders, the pen and its line, camera keys, the light layer, a soundtrack driven by curves
 exported from the page. Read it together with `references/world.md`; it predates
 `assets/world.html`, which generalizes its engine.
+
+`examples/lake-dawn/index.html` is a complete painting film: a mountain lake at sunrise drawn in
+pencil, painted in oil and brought to life under a slow push-in. Read it together with
+`references/painting.md`; its painting kit block is the same as in `assets/painting.html`, and its
+scene block shows a lake mirror, reeds and a birch crown on one gust, birds, mist and a boat.
+`audio.mjs` builds the sound on `nature.mjs`. Render it with
+`HTML=examples/lake-dawn/index.html node .agents/skills/framewright/scripts/look.mjs sheet 24 480 7 shots/lake-dawn.png`
+or `npm run example:lake-dawn`.
