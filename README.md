@@ -21,6 +21,12 @@
 
 ---
 
+<p align="center">
+  <a href="https://github.com/smwbev/framewright/releases/download/v1.4.0/framewright-promo.mp4"><img src="examples/promo/preview.webp" alt="The framewright promo: a living oil painting of a lake under the words This whole video is code, a rewind to blank paper, a prompt typed to an agent, the painting drawn in pencil, painted and brought to life, eight style cards on the beat, and the install command" width="560" /></a>
+</p>
+
+<p align="center"><sub>This promo was made with framewright: 24 seconds, one HTML file, every frame is code, the sound synthesized. <a href="https://github.com/smwbev/framewright/releases/download/v1.4.0/framewright-promo.mp4">Watch with sound</a> (16:9, 11 MB) · <a href="https://github.com/smwbev/framewright/releases/download/v1.4.0/framewright-promo-square.mp4">square cut</a> (8 MB) · <a href="examples/promo">source</a>.</sub></p>
+
 ## A drawing that becomes a painting
 
 <p align="center">
@@ -200,10 +206,15 @@ CLAUDE.md, GEMINI.md           one-line imports of AGENTS.md
 examples/ris-tv/               a finished video in scenes: index.html, audio.mjs, previews
 examples/honeybee/             a finished one-take film built as one world: index.html, audio.mjs, previews
 examples/lake-dawn/            a finished painting film: index.html, audio.mjs on nature.mjs, previews
+examples/promo/                the promo above, made with the skill: index.html, audio.mjs, preview
 examples/world-demo/           a preview of the demo that init.sh --world scaffolds
 ```
 
 ## Examples
+
+`examples/promo` is the promo at the top of this page: 24 seconds, square for X or 16:9. It runs the Lake
+at dawn painting on its own clock (shown alive, rewound, then played from paper), then eight style cards on
+the beat and an end card, over a soundtrack synthesized in `audio.mjs`.
 
 `examples/lake-dawn` is "Lake at dawn", a complete 15-second painting film: a mountain lake at
 sunrise with a birch, a boat and a jetty is drawn in pencil, painted in oil and brought to life. Read

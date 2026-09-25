@@ -21,6 +21,12 @@
 
 ---
 
+<p align="center">
+  <a href="https://github.com/smwbev/framewright/releases/download/v1.4.0/framewright-promo.mp4"><img src="examples/promo/preview.webp" alt="Промо framewright: живая масляная картина озера под надписью This whole video is code, перемотка к чистой бумаге, запрос агенту, картина рисуется карандашом, пишется маслом и оживает, восемь стилей под бит и команда установки" width="560" /></a>
+</p>
+
+<p align="center"><sub>Это промо сделано самим framewright: 24 секунды, один HTML-файл, каждый кадр это код, звук синтезирован. <a href="https://github.com/smwbev/framewright/releases/download/v1.4.0/framewright-promo.mp4">Смотреть со звуком</a> (16:9, 11 МБ) · <a href="https://github.com/smwbev/framewright/releases/download/v1.4.0/framewright-promo-square.mp4">квадратная версия</a> (8 МБ) · <a href="examples/promo">исходник</a>.</sub></p>
+
 ## Рисунок, который становится картиной
 
 <p align="center">
@@ -200,10 +206,15 @@ CLAUDE.md, GEMINI.md           однострочные импорты AGENTS.md
 examples/ris-tv/               готовый ролик из сцен: index.html, audio.mjs, превью
 examples/honeybee/             готовый фильм одним миром без склеек: index.html, audio.mjs, превью
 examples/lake-dawn/            готовый живописный фильм: index.html, audio.mjs на nature.mjs, превью
+examples/promo/                промо сверху, сделанное скиллом: index.html, audio.mjs, превью
 examples/world-demo/           превью демо, которое создаёт init.sh --world
 ```
 
 ## Примеры
+
+`examples/promo` это промо в начале страницы: 24 секунды, квадрат для X или 16:9. Картина «Озеро на
+рассвете» идёт в нём на своих часах: сначала живая, потом перемотка и заново с чистой бумаги. Дальше
+восемь стилей под бит и финальная карточка, звук синтезирует `audio.mjs`.
 
 `examples/lake-dawn` это «Озеро на рассвете», законченный живописный фильм на 15 секунд: горное
 озеро на восходе с берёзой, лодкой и мостками сначала рисуется карандашом, потом пишется маслом и

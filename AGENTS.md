@@ -30,6 +30,7 @@ CLAUDE.md, GEMINI.md              one-line imports of this file for Claude Code 
 examples/ris-tv/                  a finished 40-second video in scenes: index.html, audio.mjs, previews
 examples/honeybee/                a finished 56-second film in one take, built as one world
 examples/lake-dawn/               a finished 15-second painting film: index.html, audio.mjs on nature.mjs, previews
+examples/promo/                   the 24-second promo made with the skill: the lake painting on its own clock, style cards
 examples/world-demo/              a preview of the demo that init.sh --world scaffolds
 package.json                      npm scripts and the puppeteer dependency for this folder
 ```
