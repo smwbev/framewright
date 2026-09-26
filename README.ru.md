@@ -22,10 +22,10 @@
 ---
 
 <p align="center">
-  <a href="https://github.com/smwbev/framewright/releases/download/v1.4.0/framewright-promo.mp4"><img src="examples/promo/preview.webp" alt="Промо framewright: живая масляная картина озера под надписью This whole video is code, перемотка к чистой бумаге, запрос агенту, картина рисуется карандашом, пишется маслом и оживает, восемь стилей под бит и команда установки" width="560" /></a>
+  <a href="https://github.com/smwbev/framewright/releases/download/v1.4.0/framewright-promo-ru.mp4"><img src="examples/promo/ru/preview.webp" alt="Промо framewright: живая масляная картина озера под надписью «Всё это видео — код», перемотка к чистой бумаге, запрос агенту, картина рисуется карандашом, пишется маслом и оживает, восемь стилей под бит и команда установки" width="560" /></a>
 </p>
 
-<p align="center"><sub>Это промо сделано самим framewright: 24 секунды, один HTML-файл, каждый кадр это код, звук синтезирован. <a href="https://github.com/smwbev/framewright/releases/download/v1.4.0/framewright-promo.mp4">Смотреть со звуком</a> (16:9, 11 МБ) · <a href="https://github.com/smwbev/framewright/releases/download/v1.4.0/framewright-promo-square.mp4">квадратная версия</a> (8 МБ) · <a href="examples/promo">исходник</a>.</sub></p>
+<p align="center"><sub>Это промо сделано самим framewright: 24 секунды, один HTML-файл, каждый кадр это код, звук синтезирован. <a href="https://github.com/smwbev/framewright/releases/download/v1.4.0/framewright-promo-ru.mp4">Смотреть со звуком</a> (16:9, 11 МБ) · <a href="https://github.com/smwbev/framewright/releases/download/v1.4.0/framewright-promo.mp4">английская версия</a> · <a href="https://github.com/smwbev/framewright/releases/download/v1.4.0/framewright-promo-square.mp4">квадрат для X</a> (англ., 8 МБ) · <a href="examples/promo">исходник</a>.</sub></p>
 
 ## Рисунок, который становится картиной
 
